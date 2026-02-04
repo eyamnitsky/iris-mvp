@@ -1,7 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  Iris MVP - SES inbound processor + calendar invite sender (PoC)
+Description: Iris MVP - SES inbound processor + calendar invite sender (PoC)
 
 Globals:
   Function:
@@ -10,16 +9,20 @@ Globals:
     MemorySize: 256
     Tracing: Active
 
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+
+Mappings: {}
+
 Resources:
-  # --------------------------
-  # Storage (matches live)
-  # --------------------------
   IrisRawEmailBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: iris-prod-irisrawemailbucket-jm8b0udtvnuv
+      # IMPORTANT: do NOT set BucketName unless it exactly matches the existing bucket CFN created
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -29,13 +32,18 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: iris-mvp
+        - Key: Environment
+          Value: !Ref Environment
 
   IrisThreadsTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: iris-prod-IrisThreadsTable-FXJL2M8UM2N6
+      # IMPORTANT: do NOT set TableName unless it exactly matches the existing table CFN created
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: pk
@@ -43,13 +51,16 @@ Resources:
       KeySchema:
         - AttributeName: pk
           KeyType: HASH
+      Tags:
+        - Key: Project
+          Value: iris-mvp
+        - Key: Environment
+          Value: !Ref Environment
 
-  # --------------------------
-  # IAM (no RoleName => no CAPABILITY_NAMED_IAM)
-  # --------------------------
   IrisInviteFunctionRole:
     Type: AWS::IAM::Role
     Properties:
+      # IMPORTANT: no RoleName => avoids CAPABILITY_NAMED_IAM and avoids replacement risk
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -58,42 +69,35 @@ Resources:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        # Basic logging
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: IrisInviteFunctionPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # Read raw email from S3 (SES stores it there)
               - Effect: Allow
-                Action:
-                  - s3:GetObject
+                Action: s3:GetObject
                 Resource:
                   - !Sub "${IrisRawEmailBucket.Arn}/*"
-
-              # Write thread/metadata to DynamoDB
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:GetItem
                 Resource: !GetAtt IrisThreadsTable.Arn
-
-              # Send the outbound invite (RAW)
-              # (You can tighten this later; keep it simple for PoC)
               - Effect: Allow
-                Action:
-                  - ses:SendRawEmail
+                Action: ses:SendRawEmail
                 Resource: "*"
+      Tags:
+        - Key: Project
+          Value: iris-mvp
+        - Key: Environment
+          Value: !Ref Environment
 
-  # --------------------------
-  # Lambda (matches live name)
-  # --------------------------
   IrisInviteFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: iris-prod-IrisInviteFunction-mWTN1LXzwlBP
+      # IMPORTANT: do NOT set FunctionName unless it exactly matches the existing lambda CFN created
       CodeUri: src/
       Handler: app.lambda_handler
       Role: !GetAtt IrisInviteFunctionRole.Arn
@@ -101,20 +105,17 @@ Resources:
         Variables:
           RAW_BUCKET_NAME: !Ref IrisRawEmailBucket
           THREADS_TABLE_NAME: !Ref IrisThreadsTable
-          # If you use these in app.py, keep them here:
-          # FROM_ADDRESS: iris@liazon.cc
+      Tags:
+        Project: iris-mvp
+        Environment: !Ref Environment
 
-  # --------------------------
-  # SES -> Lambda invoke permissions (CFN-managed)
-  # These are SAFE to manage in CFN.
-  # --------------------------
   AllowSesInvokeLambdaFromReceiptRule:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref IrisInviteFunction
       Action: lambda:InvokeFunction
       Principal: ses.amazonaws.com
-      StatementId: AllowSesInvokeFromReceiptRuleV1
+      StatementId: AllowSesInvokeFromReceiptRuleV2
       SourceAccount: !Ref AWS::AccountId
       SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod:receipt-rule/iris-inbound"
 
@@ -124,7 +125,7 @@ Resources:
       FunctionName: !Ref IrisInviteFunction
       Action: lambda:InvokeFunction
       Principal: ses.amazonaws.com
-      StatementId: AllowSesInvokeFromRuleSetV1
+      StatementId: AllowSesInvokeFromRuleSetV2
       SourceAccount: !Ref AWS::AccountId
       SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod"
 
