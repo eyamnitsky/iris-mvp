@@ -104,12 +104,13 @@ def _build_raw_mime_reply(
     msg.set_content(text_body)
 
     msg.add_attachment(
-        ics_body,
+        ics_body.encode("utf-8"),
         maintype="text",
         subtype="calendar",
         filename="invite.ics",
-        params={"method": "REQUEST", "charset": "UTF-8"},
+        params={"method": "REQUEST"},
     )
+
 
     return msg.as_bytes(policy=policy.SMTP)
 
