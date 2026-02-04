@@ -1,20 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Iris MVP - SES inbound processor + calendar invite sender (PoC)
+Description: >
+  Iris MVP - inbound email (SES -> S3) processing + DynamoDB thread tracking + outbound calendar invite (SES).
+  This stack intentionally does NOT create/manage SES receipt rule sets/rules or the S3 bucket policy, because
+  those resources already exist and are managed outside this stack.
 
 Globals:
   Function:
     Runtime: python3.12
-    Timeout: 30
+    Architectures:
+      - arm64
     MemorySize: 256
+    Timeout: 20
     Tracing: Active
-
-Parameters:
-  Environment:
-    Type: String
-    Default: prod
-
-Mappings: {}
 
 Resources:
   IrisRawEmailBucket:
@@ -22,112 +20,71 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      # IMPORTANT: do NOT set BucketName unless it exactly matches the existing bucket CFN created
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      Tags:
-        - Key: Project
-          Value: iris-mvp
-        - Key: Environment
-          Value: !Ref Environment
 
   IrisThreadsTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      # IMPORTANT: do NOT set TableName unless it exactly matches the existing table CFN created
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: pk
+        - AttributeName: threadId
           AttributeType: S
       KeySchema:
-        - AttributeName: pk
+        - AttributeName: threadId
           KeyType: HASH
-      Tags:
-        - Key: Project
-          Value: iris-mvp
-        - Key: Environment
-          Value: !Ref Environment
-
-  IrisInviteFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      # IMPORTANT: no RoleName => avoids CAPABILITY_NAMED_IAM and avoids replacement risk
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: IrisInviteFunctionPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: s3:GetObject
-                Resource:
-                  - !Sub "${IrisRawEmailBucket.Arn}/*"
-              - Effect: Allow
-                Action:
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:GetItem
-                Resource: !GetAtt IrisThreadsTable.Arn
-              - Effect: Allow
-                Action: ses:SendRawEmail
-                Resource: "*"
-      Tags:
-        - Key: Project
-          Value: iris-mvp
-        - Key: Environment
-          Value: !Ref Environment
 
   IrisInviteFunction:
     Type: AWS::Serverless::Function
     Properties:
-      # IMPORTANT: do NOT set FunctionName unless it exactly matches the existing lambda CFN created
       CodeUri: src/
       Handler: app.lambda_handler
-      Role: !GetAtt IrisInviteFunctionRole.Arn
+
+      EphemeralStorage:
+        Size: 512
+
       Environment:
         Variables:
-          RAW_BUCKET_NAME: !Ref IrisRawEmailBucket
-          THREADS_TABLE_NAME: !Ref IrisThreadsTable
-      Tags:
-        Project: iris-mvp
-        Environment: !Ref Environment
+          BUCKET_NAME: !Ref IrisRawEmailBucket
+          TABLE_NAME: !Ref IrisThreadsTable
+          IRIS_EMAIL: iris@liazon.cc
+          TIMEZONE: America/New_York
 
+      Policies:
+        # Read the raw MIME email from S3
+        - S3ReadPolicy:
+            BucketName: !Ref IrisRawEmailBucket
+
+        # Write/read thread state in DynamoDB
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IrisThreadsTable
+
+        # Send outbound invites via SES (SendRawEmail has no resource-level ARN; must be "*")
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendRawEmail
+              Resource: "*"
+
+  # Allow SES receipt rules to invoke this Lambda.
+  # NOTE: This does not create SES rules; it only permits invocation from the existing rule ARN.
   AllowSesInvokeLambdaFromReceiptRule:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref IrisInviteFunction
       Action: lambda:InvokeFunction
-      Principal: ses.amazonaws.com
-      StatementId: AllowSesInvokeFromReceiptRuleV2
-      SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod:receipt-rule/iris-inbound"
-
-  AllowSesInvokeLambdaFromRuleSet:
-    Type: AWS::Lambda::Permission
-    Properties:
       FunctionName: !Ref IrisInviteFunction
-      Action: lambda:InvokeFunction
       Principal: ses.amazonaws.com
-      StatementId: AllowSesInvokeFromRuleSetV2
       SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod"
+      SourceArn: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod:receipt-rule/iris-inbound
 
 Outputs:
   RawEmailBucketName:
@@ -136,3 +93,5 @@ Outputs:
     Value: !Ref IrisThreadsTable
   InviteFunctionName:
     Value: !Ref IrisInviteFunction
+  InviteFunctionArn:
+    Value: !GetAtt IrisInviteFunction.Arn
