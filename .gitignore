@@ -1,0 +1,17 @@
+# --- AWS SAM local build artifacts ---
+.aws-sam/
+
+# --- Local AWS credentials / config (just in case) ---
+.aws/
+
+# --- Infra reconciliation / scratch files ---
+oldconfigs/
+
+# --- OS / editor noise ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Python ---
+__pycache__/
+*.pyc

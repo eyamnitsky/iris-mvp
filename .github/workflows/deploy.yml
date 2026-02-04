@@ -26,12 +26,12 @@ jobs:
       - name: Build
         run: sam build
 
-      - name: Deploy
+      - name: Create CloudFormation change set (no deploy)
         run: |
           sam deploy \
             --stack-name iris-prod \
+            --no-execute-changeset \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --capabilities CAPABILITY_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --region us-east-1
-
