@@ -1,44 +1,41 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Iris MVP - inbound email -> S3 raw -> Lambda -> reply-all w/ ICS + DynamoDB idempotency
-
-Parameters:
-  IrisEmail:
-    Type: String
-    Default: iris@liazon.cc
-    Description: The inbound recipient Iris listens for (and the From address Iris uses for outbound).
-
-  ReceiptRuleSetName:
-    Type: String
-    Default: iris-prod-cfn
-    Description: SES receipt rule set managed by CloudFormation (use a distinct name to avoid collisions with any manually created rule set).
-
-  ReceiptRuleName:
-    Type: String
-    Default: iris-inbound
-    Description: SES receipt rule name.
-
-  RawEmailPrefix:
-    Type: String
-    Default: raw/
-    Description: S3 key prefix for inbound raw emails.
+Description: >
+  Iris MVP - SES inbound processor + calendar invite sender (PoC)
 
 Globals:
   Function:
     Runtime: python3.12
-    Timeout: 20
+    Timeout: 30
     MemorySize: 256
+    Tracing: Active
 
 Resources:
-  # Keep these minimal to match the existing deployed stack and avoid replacements.
+  # --------------------------
+  # Storage (matches live)
+  # --------------------------
   IrisRawEmailBucket:
     Type: AWS::S3::Bucket
-    Metadata:
-      SamResourceId: IrisRawEmailBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: iris-prod-irisrawemailbucket-jm8b0udtvnuv
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
 
   IrisThreadsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
+      TableName: iris-prod-IrisThreadsTable-FXJL2M8UM2N6
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: pk
@@ -46,104 +43,90 @@ Resources:
       KeySchema:
         - AttributeName: pk
           KeyType: HASH
-    Metadata:
-      SamResourceId: IrisThreadsTable
 
+  # --------------------------
+  # IAM (no RoleName => no CAPABILITY_NAMED_IAM)
+  # --------------------------
+  IrisInviteFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Basic logging
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: IrisInviteFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Read raw email from S3 (SES stores it there)
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "${IrisRawEmailBucket.Arn}/*"
+
+              # Write thread/metadata to DynamoDB
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt IrisThreadsTable.Arn
+
+              # Send the outbound invite (RAW)
+              # (You can tighten this later; keep it simple for PoC)
+              - Effect: Allow
+                Action:
+                  - ses:SendRawEmail
+                Resource: "*"
+
+  # --------------------------
+  # Lambda (matches live name)
+  # --------------------------
   IrisInviteFunction:
     Type: AWS::Serverless::Function
     Properties:
+      FunctionName: iris-prod-IrisInviteFunction-mWTN1LXzwlBP
       CodeUri: src/
       Handler: app.lambda_handler
+      Role: !GetAtt IrisInviteFunctionRole.Arn
       Environment:
         Variables:
-          BUCKET_NAME: !Ref IrisRawEmailBucket
-          TABLE_NAME: !Ref IrisThreadsTable
-          IRIS_EMAIL: !Ref IrisEmail
-          TIMEZONE: America/New_York
-          DEFAULT_START_HOUR: '13'
-          DEFAULT_DURATION_MINUTES: '30'
-      Policies:
-        - S3ReadPolicy:
-            BucketName: !Ref IrisRawEmailBucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref IrisThreadsTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - ses:SendRawEmail
-              Resource: '*'
+          RAW_BUCKET_NAME: !Ref IrisRawEmailBucket
+          THREADS_TABLE_NAME: !Ref IrisThreadsTable
+          # If you use these in app.py, keep them here:
+          # FROM_ADDRESS: iris@liazon.cc
 
-  # ---- SES inbound (new, CloudFormation-managed) ----
-
-  IrisReceiptRuleSet:
-    Type: AWS::SES::ReceiptRuleSet
-    Properties:
-      RuleSetName: !Ref ReceiptRuleSetName
-
-  # Allow SES to store the raw email object in S3 under RawEmailPrefix
-  IrisRawEmailBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref IrisRawEmailBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowSESPutObject
-            Effect: Allow
-            Principal:
-              Service: ses.amazonaws.com
-            Action:
-              - s3:PutObject
-            Resource: !Sub arn:aws:s3:::${IrisRawEmailBucket}/${RawEmailPrefix}*
-            Condition:
-              StringEquals:
-                aws:Referer: !Ref AWS::AccountId
-
-  # Allow SES to invoke the Lambda (rule-set level)
-  AllowSesInvokeLambdaRuleSet:
+  # --------------------------
+  # SES -> Lambda invoke permissions (CFN-managed)
+  # These are SAFE to manage in CFN.
+  # --------------------------
+  AllowSesInvokeLambdaFromReceiptRule:
     Type: AWS::Lambda::Permission
     Properties:
-      Action: lambda:InvokeFunction
       FunctionName: !Ref IrisInviteFunction
+      Action: lambda:InvokeFunction
       Principal: ses.amazonaws.com
+      StatementId: AllowSesInvokeFromReceiptRuleV1
       SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${ReceiptRuleSetName}
+      SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod:receipt-rule/iris-inbound"
 
-  # Allow SES to invoke the Lambda (rule-level; some setups evaluate this ARN)
-  AllowSesInvokeLambdaRule:
+  AllowSesInvokeLambdaFromRuleSet:
     Type: AWS::Lambda::Permission
     Properties:
-      Action: lambda:InvokeFunction
       FunctionName: !Ref IrisInviteFunction
+      Action: lambda:InvokeFunction
       Principal: ses.amazonaws.com
+      StatementId: AllowSesInvokeFromRuleSetV1
       SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${ReceiptRuleSetName}:receipt-rule/${ReceiptRuleName}
-
-  IrisInboundReceiptRule:
-    Type: AWS::SES::ReceiptRule
-    DependsOn:
-      - IrisReceiptRuleSet
-      - IrisRawEmailBucketPolicy
-      - AllowSesInvokeLambdaRuleSet
-      - AllowSesInvokeLambdaRule
-    Properties:
-      RuleSetName: !Ref ReceiptRuleSetName
-      Rule:
-        Name: !Ref ReceiptRuleName
-        Enabled: true
-        ScanEnabled: true
-        TlsPolicy: Optional
-        Recipients:
-          - !Ref IrisEmail
-        Actions:
-          - S3Action:
-              BucketName: !Ref IrisRawEmailBucket
-              ObjectKeyPrefix: !Ref RawEmailPrefix
-          - LambdaAction:
-              FunctionArn: !GetAtt IrisInviteFunction.Arn
-              InvocationType: Event
-          - StopAction:
-              Scope: RuleSet
+      SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/iris-prod"
 
 Outputs:
   RawEmailBucketName:
@@ -152,7 +135,3 @@ Outputs:
     Value: !Ref IrisThreadsTable
   InviteFunctionName:
     Value: !Ref IrisInviteFunction
-  ReceiptRuleSetName:
-    Value: !Ref ReceiptRuleSetName
-  ReceiptRuleName:
-    Value: !Ref ReceiptRuleName
