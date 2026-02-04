@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Iris MVP - inbound email -> Lambda -> reply-all w/ ICS + DynamoDB idempotency
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 20
+    MemorySize: 256
+Resources:
+  IrisRawEmailBucket:
+    Type: AWS::S3::Bucket
+  IrisThreadsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+  IrisInviteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: IrisInviteFunction
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          BUCKET_NAME:
+            Ref: IrisRawEmailBucket
+          TABLE_NAME:
+            Ref: IrisThreadsTable
+          IRIS_EMAIL: iris@liazon.cc
+          TIMEZONE: America/New_York
+          DEFAULT_START_HOUR: '13'
+          DEFAULT_DURATION_MINUTES: '30'
+      Policies:
+      - S3ReadPolicy:
+          BucketName:
+            Ref: IrisRawEmailBucket
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: IrisThreadsTable
+      - Statement:
+        - Effect: Allow
+          Action:
+          - ses:SendRawEmail
+          Resource: '*'
+    Metadata:
+      SamResourceId: IrisInviteFunction
+Outputs:
+  RawEmailBucketName:
+    Value:
+      Ref: IrisRawEmailBucket
+  ThreadsTableName:
+    Value:
+      Ref: IrisThreadsTable
+  InviteFunctionName:
+    Value:
+      Ref: IrisInviteFunction
