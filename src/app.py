@@ -158,6 +158,7 @@ def _load_email_bytes_from_s3(bucket: str, message_id: str, receipt: dict) -> tu
 
 def lambda_handler(event, context):
     # Log enough to debug, but avoid dumping huge payloads.
+    print("DEPLOY_MARKER_001")
     print("[event] records=", len(event.get("Records", [])))
     print("[event] head=", _safe_json(event)[:2000])
 
