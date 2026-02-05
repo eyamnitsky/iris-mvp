@@ -362,8 +362,16 @@ def lambda_handler(event, context):
         cc_emails = _flatten_emails(eml.get("Cc"))
 
         # Only respond when Iris is CC'd
-        if IRIS_EMAIL not in [e.lower() for e in cc_emails]:
-            return {"statusCode": 200, "body": json.dumps({"ok": True, "ignored": "iris_not_cc"})}
+        to_set = {e.lower() for e in to_emails}
+        cc_set = {e.lower() for e in cc_emails}
+
+        # Ignore messages sent BY Iris (avoid loops)
+        if from_email == IRIS_EMAIL:
+            return {"statusCode": 200, "body": json.dumps({"ok": True, "ignored": "from_iris"})}
+
+        # Process if Iris is in To or Cc
+        if IRIS_EMAIL not in to_set and IRIS_EMAIL not in cc_set:
+            return {"statusCode": 200, "body": json.dumps({"ok": True, "ignored": "iris_not_recipient"})}
 
         body_text = _extract_plaintext_body(eml)
 
