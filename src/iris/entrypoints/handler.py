@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 from ..infra.config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, require_env
 from ..infra.aws_clients import table as _table, ses as _ses
 from ..infra.ddb import key_for_message
-from ..infra.serialization import to_ddb_safe, to_json_safe
+from ..infra.serialization import ddb_clean, ddb_sanitize, to_json_safe
 from ..email.email_utils import flatten_emails, dedupe, safe_json, extract_plaintext_body, parse_eml
 from ..infra.s3_loader import load_email_bytes_from_s3
 from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
@@ -78,7 +78,7 @@ def _coord_put(thread_id: str, coordination_json: str) -> None:
         "updated_at": datetime.utcnow().isoformat() + "Z",
         "coordination_json": coordination_json,
     })
-    _table().put_item(Item=to_ddb_safe(item))
+    _table().put_item(Item=ddb_clean(ddb_sanitize(item)))
 
 
 # -------------------------
@@ -166,14 +166,14 @@ def handle_ses_event(event: dict) -> dict:
             "thread_id": thread_id,
             "subject": subject,
             "from_email": from_email,
-            "to_emails": set(to_emails),
-            "cc_emails": set(cc_emails),
+            "to_emails": list(to_emails),
+            "cc_emails": list(cc_emails),
             "s3_key": used_key,
             "received_at": datetime.utcnow().isoformat() + "Z",
             "guardrail_blocked_at": datetime.utcnow().isoformat() + "Z",
             "guardrail_json": json.dumps(to_json_safe(guardrail_resp)) if guardrail_resp else "{}",
         })
-        _table().put_item(Item=to_ddb_safe(item))
+        _table().put_item(Item=ddb_clean(ddb_sanitize(item)))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "guardrail_blocked"})}
 
@@ -187,12 +187,26 @@ def handle_ses_event(event: dict) -> dict:
     print("[ai] result=", safe_json(ai_result))
 
     ai_parsed_raw = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
-    ai_parsed = to_ddb_safe(ai_parsed_raw) if ai_parsed_raw else None  # critical for DDB + engine safety
+    ai_parsed = ddb_sanitize(ai_parsed_raw) if ai_parsed_raw else None  # critical for DDB + engine safety
 
     # ---- Multi participant routing (deterministic) ----
-    participants_all = dedupe([from_email] + to_emails + cc_emails)
-    participants_all = [e for e in participants_all if e and e.lower() != IRIS_EMAIL.lower()]
-    is_multi = len(participants_all) >= 2
+    existing_coord_item = _coord_get(thread_id)
+    existing_participants = []
+    if existing_coord_item:
+        try:
+            data = json.loads(existing_coord_item.get("coordination_json") or "{}")
+            existing_participants = list((data.get("participants") or {}).keys())
+        except Exception:
+            existing_participants = []
+
+    if existing_coord_item:
+        participants_all = existing_participants
+        is_multi = True
+    else:
+        participants_all = dedupe([from_email] + to_emails + cc_emails)
+        participants_all = [e for e in participants_all if e and e.lower() != IRIS_EMAIL.lower()]
+        is_multi = len(participants_all) >= 2
+
     print("[coord] participants_all=", participants_all)
     print("[coord] is_multi=", is_multi)
 
@@ -355,14 +369,14 @@ def handle_ses_event(event: dict) -> dict:
             "thread_id": thread_id,
             "subject": subject,
             "from_email": from_email,
-            "to_emails": set(to_emails),
-            "cc_emails": set(cc_emails),
+            "to_emails": list(to_emails),
+            "cc_emails": list(cc_emails),
             "s3_key": used_key,
             "received_at": datetime.utcnow().isoformat() + "Z",
             "ai_raw": ai_result.get("raw") if isinstance(ai_result, dict) else None,
             "coord_action": "handled_multi",
         })
-        _table().put_item(Item=to_ddb_safe(item))
+        _table().put_item(Item=ddb_clean(ddb_sanitize(item)))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "coordination"})}
 
@@ -423,8 +437,8 @@ def handle_ses_event(event: dict) -> dict:
             "thread_id": thread_id,
             "subject": subject,
             "from_email": from_email,
-            "to_emails": set(to_emails),
-            "cc_emails": set(cc_emails),
+            "to_emails": list(to_emails),
+            "cc_emails": list(cc_emails),
             "s3_key": used_key,
             "received_at": datetime.utcnow().isoformat() + "Z",
             "clarification_sent_at": datetime.utcnow().isoformat() + "Z",
@@ -433,7 +447,7 @@ def handle_ses_event(event: dict) -> dict:
             "conv_intent": thread_state.intent,
             "conv_question": decision.reply_text,
         })
-        _table().put_item(Item=to_ddb_safe(item))
+        _table().put_item(Item=ddb_clean(ddb_sanitize(item)))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "clarify"})}
 
@@ -486,8 +500,8 @@ def handle_ses_event(event: dict) -> dict:
         "thread_id": thread_id,
         "subject": subject,
         "from_email": from_email,
-        "to_emails": set(to_emails),
-        "cc_emails": set(cc_emails),
+        "to_emails": list(to_emails),
+        "cc_emails": list(cc_emails),
         "s3_key": used_key,
         "received_at": datetime.utcnow().isoformat() + "Z",
         "event_uid": event_uid,
@@ -498,7 +512,7 @@ def handle_ses_event(event: dict) -> dict:
         "scheduled_start": start.isoformat(),
         "scheduled_end": end.isoformat(),
     })
-    _table().put_item(Item=to_ddb_safe(item))
+    _table().put_item(Item=ddb_clean(ddb_sanitize(item)))
 
     return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "scheduled"})}
 

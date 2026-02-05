@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from .models import MeetingThread, Participant, TimeWindow
-from ..infra.serialization import to_ddb_safe, to_json_safe
+from ..infra.serialization import ddb_clean, ddb_sanitize, to_json_safe
 
 
 def _tw_to_dict(tw: TimeWindow) -> dict:
@@ -115,10 +115,10 @@ class DdbThreadStore:
         }
 
         self._table.put_item(
-            Item=to_ddb_safe({
+            Item=ddb_clean(ddb_sanitize({
                 **self._key(thread.thread_id),
                 "record_type": "COORDINATION_THREAD",
                 "updated_at": datetime.utcnow().isoformat() + "Z",
                 "json": json.dumps(to_json_safe(data)),
-            })
+            }))
         )
