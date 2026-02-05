@@ -11,6 +11,7 @@ from ..infra.config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, require_env
 from ..infra.aws_clients import table as _table, ses as _ses
 from ..infra.ddb import key_for_message
 from ..infra.serialization import ddb_clean, ddb_sanitize, to_json_safe
+from ..infra.threading import extract_message_ids, resolve_thread_id, upsert_thread_aliases
 from ..email.email_utils import flatten_emails, dedupe, safe_json, extract_plaintext_body, parse_eml
 from ..infra.s3_loader import load_email_bytes_from_s3
 from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
@@ -27,11 +28,13 @@ from iris_ai_parser import parse_email
 # -------------------------
 
 def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
-    """Best-effort thread identifier using References/In-Reply-To/Message-Id."""
+    """
+    Deprecated: use infra.threading.resolve_thread_id instead.
+    Retained for backward compatibility in case of external imports.
+    """
     def _first_msgid(value: str) -> str:
         if not value:
             return ""
-        # Message-Ids typically look like <abc@domain>; References may contain several.
         ids = re.findall(r"<([^>]+)>", value)
         if ids:
             return ids[0]
@@ -39,20 +42,15 @@ def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
 
     refs = eml.get("References") or ""
     root = _first_msgid(str(refs))
-
     if not root:
         irt = eml.get("In-Reply-To") or ""
         root = _first_msgid(str(irt))
-
     if not root:
         mid = eml.get("Message-Id") or eml.get("Message-ID") or ""
         root = _first_msgid(str(mid))
-
     if not root:
         root = fallback_message_id
-
-    root = root.replace("\n", "").replace("\r", "").strip()
-    return root
+    return root.replace("\n", "").replace("\r", "").strip()
 
 
 # -------------------------
@@ -142,17 +140,16 @@ def handle_ses_event(event: dict) -> dict:
 
     body_text = extract_plaintext_body(eml)
 
-    # Compute real thread id early and use it everywhere
-    thread_root = _extract_thread_root_id(eml, message_id)
-    thread_id = f"thread#{thread_root}"
-    print(
-        "[thread] thread_id=",
-        thread_id,
-        " Message-Id=",
-        eml.get("Message-Id"),
-        " In-Reply-To=",
-        eml.get("In-Reply-To"),
-    )
+    # Compute canonical thread id early and use it everywhere
+    candidates = extract_message_ids(eml)
+    if message_id and message_id not in candidates:
+        candidates.append(message_id)
+
+    thread_id = resolve_thread_id(eml, message_id, _table())
+    print("[thread] resolved thread_id=", thread_id, " candidates=", candidates)
+
+    # Upsert aliases for all candidate IDs
+    upsert_thread_aliases(_table(), candidates, thread_id)
 
     # ---- Bedrock Guardrails (INPUT) ----
     allowed, block_msg, guardrail_resp = apply_input_guardrail(body_text)
