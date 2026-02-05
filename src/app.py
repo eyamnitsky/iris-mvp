@@ -14,7 +14,16 @@ from src.iris_ai_parser import parse_email
 
 s3 = boto3.client("s3")
 ses = boto3.client("ses")
-ddb = boto3.resource("dynamodb")
+AWS_REGION = os.environ.get("AWS_REGION")  # Lambda always sets this
+ddb = boto3.resource("dynamodb", region_name=AWS_REGION)
+table = ddb.Table(TABLE_NAME)
+ddb_client = boto3.client("dynamodb", region_name=AWS_REGION)
+
+desc = ddb_client.describe_table(TableName=TABLE_NAME)["Table"]
+print("[ddb] region=", AWS_REGION)
+print("[ddb] TABLE_NAME=", TABLE_NAME)
+print("[ddb] KeySchema=", desc.get("KeySchema"))
+print("[ddb] AttrDefs=", desc.get("AttributeDefinitions"))
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 TABLE_NAME = os.environ["TABLE_NAME"]
@@ -22,8 +31,6 @@ IRIS_EMAIL = os.environ.get("IRIS_EMAIL", "iris@liazon.cc").lower()
 TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
 DEFAULT_START_HOUR = int(os.environ.get("DEFAULT_START_HOUR", "13"))
 DEFAULT_DURATION_MINUTES = int(os.environ.get("DEFAULT_DURATION_MINUTES", "30"))
-
-table = ddb.Table(TABLE_NAME)
 
 
 def _flatten_emails(header_value: Optional[str]) -> list[str]:
