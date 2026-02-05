@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 import re
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from botocore.exceptions import ClientError
 
