@@ -20,6 +20,18 @@ from ..conversation.guardrails import apply_input_guardrail
 # Backwards-compatible import (root-level shim also exists)
 from iris_ai_parser import parse_email
 
+from decimal import Decimal
+
+def ddb_sanitize(obj):
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    if isinstance(obj, dict):
+        return {k: ddb_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [ddb_sanitize(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [ddb_sanitize(v) for v in obj]
+    return obj
 
 def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
     """Best-effort thread identifier using References/In-Reply-To, else message_id."""
@@ -129,7 +141,7 @@ def handle_ses_event(event: dict) -> dict:
                 "guardrail_json": json.dumps(guardrail_resp) if guardrail_resp else "{}",
             }
         )
-        _table().put_item(Item=item)
+        _table().put_item(Item=ddb_sanitize(item))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "guardrail_blocked"})}
 
@@ -200,7 +212,7 @@ def handle_ses_event(event: dict) -> dict:
                 "conv_question": decision.reply_text,
             }
         )
-        _table().put_item(Item=item)
+        _table().put_item(Item=ddb_sanitize(item))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "clarify"})}
 
@@ -267,7 +279,7 @@ def handle_ses_event(event: dict) -> dict:
             "scheduled_end": end.isoformat(),
         }
     )
-    _table().put_item(Item=item)
+    _table().put_item(Item=ddb_sanitize(item))
 
     return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "scheduled"})}
 
