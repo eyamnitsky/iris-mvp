@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from botocore.exceptions import ClientError
@@ -13,10 +14,34 @@ from ..email.email_utils import flatten_emails, dedupe, safe_json, extract_plain
 from ..infra.s3_loader import load_email_bytes_from_s3
 from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
 from ..email.mime_builder import build_ics, build_raw_mime_text_reply, build_raw_mime_reply_with_ics
+from ..conversation.engine import process_incoming_email
+from ..conversation.guardrails import apply_input_guardrail
 
 # Backwards-compatible import (root-level shim also exists)
 from iris_ai_parser import parse_email
 
+
+def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
+    """Best-effort thread identifier using References/In-Reply-To, else message_id."""
+    def _first_msgid(value: str) -> str:
+        if not value:
+            return ""
+        # Message-Ids typically look like <abc@domain>; References may contain several.
+        ids = re.findall(r"<([^>]+)>", value)
+        if ids:
+            return ids[0]
+        return value.strip().strip("<>").split()[0]
+
+    refs = eml.get("References") or ""
+    root = _first_msgid(str(refs))
+    if not root:
+        irt = eml.get("In-Reply-To") or ""
+        root = _first_msgid(str(irt))
+    if not root:
+        root = fallback_message_id
+    # Keep it stable and DynamoDB-safe
+    root = root.replace("\n", "").replace("\r", "").strip()
+    return root
 
 def handle_ses_event(event: dict) -> dict:
     print("DEPLOY_MARKER_AI_SCHEDULE_002")
@@ -34,7 +59,11 @@ def handle_ses_event(event: dict) -> dict:
     ddb_key = key_for_message(message_id)
     existing = _table().get_item(Key=ddb_key).get("Item")
 
-    if existing and (existing.get("invite_sent_at") or existing.get("clarification_sent_at")):
+    if existing and (
+        existing.get("invite_sent_at")
+        or existing.get("clarification_sent_at")
+        or existing.get("guardrail_blocked_at")
+    ):
         print(f"[ddb] idempotent skip message_id={message_id}")
         return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": True})}
 
@@ -50,6 +79,9 @@ def handle_ses_event(event: dict) -> dict:
     to_emails = flatten_emails(eml.get("To"))
     cc_emails = flatten_emails(eml.get("Cc"))
 
+    # Who should receive Iris' replies
+    reply_recipients = dedupe([from_email] + to_emails + cc_emails)
+
     to_set = {e.lower() for e in to_emails}
     cc_set = {e.lower() for e in cc_emails}
 
@@ -63,26 +95,10 @@ def handle_ses_event(event: dict) -> dict:
 
     body_text = extract_plaintext_body(eml)
 
-    # ---- AI parse ----
-    ai_result = parse_email(
-        {
-            "thread_id": f"thread#{message_id}",
-            "message_id": message_id,
-            "body_text": body_text,
-            "timezone_default": TIMEZONE,
-        }
-    )
-
-    print("[ai] result=", safe_json(ai_result))
-
-    ai_parsed = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
-
-    reply_recipients = dedupe([from_email] + to_emails + cc_emails)
-
-    # ---- Clarification path: email question only, no ICS ----
-    if ai_parsed and ai_parsed.get("needs_clarification"):
-        clar_q = (ai_parsed.get("clarifying_question") or "What day and time works for you?").strip()
-        text_body_reply = clar_q + "\n"
+    # ---- Bedrock Guardrails (INPUT) ----
+    allowed, block_msg, guardrail_resp = apply_input_guardrail(body_text)
+    if not allowed:
+        text_body_reply = (block_msg or "").strip() + "\n"
 
         raw_mime = build_raw_mime_text_reply(
             subject=f"Re: {subject}",
@@ -102,6 +118,75 @@ def handle_ses_event(event: dict) -> dict:
         item = key_for_message(message_id)
         item.update(
             {
+                "record_type": "MESSAGE",
+                "subject": subject,
+                "from_email": from_email,
+                "to_emails": set(to_emails),
+                "cc_emails": set(cc_emails),
+                "s3_key": used_key,
+                "received_at": datetime.utcnow().isoformat() + "Z",
+                "guardrail_blocked_at": datetime.utcnow().isoformat() + "Z",
+                "guardrail_json": json.dumps(guardrail_resp) if guardrail_resp else "{}",
+            }
+        )
+        _table().put_item(Item=item)
+
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "guardrail_blocked"})}
+
+    # ---- AI parse ----
+    ai_result = parse_email(
+        {
+            "thread_id": f"thread#{message_id}",
+            "message_id": message_id,
+            "body_text": body_text,
+            "timezone_default": TIMEZONE,
+        }
+    )
+
+    print("[ai] result=", safe_json(ai_result))
+
+    ai_parsed = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
+
+    # ---- Conversation engine (thread-scoped) ----
+    thread_root = _extract_thread_root_id(eml, message_id)
+    thread_id = f"thread#{thread_root}"
+
+    thread_state, decision = process_incoming_email(
+        table=_table(),
+        thread_id=thread_id,
+        message_id=message_id,
+        body_text=body_text,
+        timezone_default=TIMEZONE,
+        ai_parsed=ai_parsed,
+    )
+
+    if decision.action == "ignore":
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": True})}
+
+    # ---- Clarification path: email question only, no ICS ----
+    if decision.action == "clarify":
+        text_body_reply = (decision.reply_text or "What day and time would you like to schedule this meeting for?").strip() + "\n"
+
+        raw_mime = build_raw_mime_text_reply(
+            subject=f"Re: {subject}",
+            text_body=text_body_reply,
+            from_addr=IRIS_EMAIL,
+            to_addrs=reply_recipients,
+            in_reply_to=eml.get("Message-Id"),
+            references=eml.get("References"),
+        )
+
+        _ses().send_raw_email(
+            Source=IRIS_EMAIL,
+            Destinations=reply_recipients,
+            RawMessage={"Data": raw_mime},
+        )
+
+        item = key_for_message(message_id)
+        item.update(
+            {
+                "record_type": "MESSAGE",
+                "thread_id": thread_id,
                 "subject": subject,
                 "from_email": from_email,
                 "to_emails": set(to_emails),
@@ -109,25 +194,26 @@ def handle_ses_event(event: dict) -> dict:
                 "s3_key": used_key,
                 "received_at": datetime.utcnow().isoformat() + "Z",
                 "clarification_sent_at": datetime.utcnow().isoformat() + "Z",
-                "ai_json": json.dumps(ai_parsed),
+                "ai_json": json.dumps(ai_parsed) if ai_parsed else "{}",
+                "conv_state": thread_state.state,
+                "conv_intent": thread_state.intent,
+                "conv_question": decision.reply_text,
             }
         )
         _table().put_item(Item=item)
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "clarify"})}
 
-    # ---- Scheduling path: use AI candidate if present; else fallback ----
-    tz = ZoneInfo(TIMEZONE)
+    # ---- Scheduling path ----
+    tz = ZoneInfo(thread_state.timezone or TIMEZONE)
     start, end = next_day_at_default_time(tz)
 
-    if ai_parsed and not ai_parsed.get("needs_clarification"):
-        candidates = ai_parsed.get("candidates") or []
-        if candidates:
-            try:
-                start, end = candidate_to_datetimes(candidates[0], tz)
-                print("[decision] scheduling from AI candidate", start, end)
-            except Exception as e:
-                print("[decision] AI candidate parse failed; falling back:", repr(e))
+    if decision.time_kind == "candidate" and decision.chosen_candidate:
+        try:
+            start, end = candidate_to_datetimes(decision.chosen_candidate, tz)
+            print("[decision] scheduling from candidate", start, end)
+        except Exception as e:
+            print("[decision] candidate parse failed; falling back:", repr(e))
 
     event_uid = f"{uuid.uuid4()}@{IRIS_EMAIL.split('@', 1)[1]}"
     ics = build_ics(
@@ -164,6 +250,8 @@ def handle_ses_event(event: dict) -> dict:
     item = key_for_message(message_id)
     item.update(
         {
+            "record_type": "MESSAGE",
+            "thread_id": thread_id,
             "subject": subject,
             "from_email": from_email,
             "to_emails": set(to_emails),
@@ -173,6 +261,8 @@ def handle_ses_event(event: dict) -> dict:
             "event_uid": event_uid,
             "invite_sent_at": datetime.utcnow().isoformat() + "Z",
             "ai_json": json.dumps(ai_parsed) if ai_parsed else "{}",
+            "conv_state": thread_state.state,
+            "conv_intent": thread_state.intent,
             "scheduled_start": start.isoformat(),
             "scheduled_end": end.isoformat(),
         }
