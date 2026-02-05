@@ -5,8 +5,11 @@ from email import policy
 from typing import Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from email.utils import formataddr
 
 from ..infra.config import TIMEZONE
+
+DISPLAY_NAME = "Iris (Liazon)"
 
 def build_ics(subject: str, start: datetime, end: datetime, organizer: str, attendees: List[str], uid: str) -> str:
     dtstamp = datetime.now(tz=ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%SZ")
@@ -46,7 +49,7 @@ def build_raw_mime_text_reply(
 ) -> bytes:
     msg = email.message.EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = from_addr
+    msg["From"] = formataddr((DISPLAY_NAME, from_addr))
     msg["To"] = ", ".join(to_addrs)
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
@@ -67,7 +70,7 @@ def build_raw_mime_reply_with_ics(
 ) -> bytes:
     msg = email.message.EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = from_addr
+    msg["From"] = formataddr((DISPLAY_NAME, from_addr))
     msg["To"] = ", ".join(to_addrs)
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to

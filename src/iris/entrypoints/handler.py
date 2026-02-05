@@ -27,7 +27,7 @@ from iris_ai_parser import parse_email
 # -------------------------
 
 def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
-    """Best-effort thread identifier using References/In-Reply-To, else message_id."""
+    """Best-effort thread identifier using References/In-Reply-To/Message-Id."""
     def _first_msgid(value: str) -> str:
         if not value:
             return ""
@@ -39,46 +39,20 @@ def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
 
     refs = eml.get("References") or ""
     root = _first_msgid(str(refs))
+
     if not root:
         irt = eml.get("In-Reply-To") or ""
         root = _first_msgid(str(irt))
+
+    if not root:
+        mid = eml.get("Message-Id") or eml.get("Message-ID") or ""
+        root = _first_msgid(str(mid))
+
     if not root:
         root = fallback_message_id
 
     root = root.replace("\n", "").replace("\r", "").strip()
     return root
-
-
-def _extract_message_ids(eml: dict) -> list[str]:
-    """Collect message IDs from References and In-Reply-To headers."""
-    def _ids_from(value: str) -> list[str]:
-        if not value:
-            return []
-        ids = re.findall(r"<([^>]+)>", value)
-        if ids:
-            return ids
-        val = value.strip().strip("<>").split()
-        return [val[0]] if val else []
-
-    refs = eml.get("References") or ""
-    irt = eml.get("In-Reply-To") or ""
-    return _ids_from(str(refs)) + _ids_from(str(irt))
-
-
-def _resolve_coord_thread_id(thread_id: str, eml: dict) -> str:
-    """If this email is part of an existing coordination thread, use that thread_id."""
-    if _coord_get(thread_id):
-        print(f"[coord] thread match by thread_id={thread_id}")
-        return thread_id
-    for mid in _extract_message_ids(eml):
-        item = _table().get_item(Key=key_for_message(mid)).get("Item")
-        if not item:
-            continue
-        candidate_tid = item.get("thread_id")
-        if candidate_tid and _coord_get(candidate_tid):
-            print(f"[coord] thread match by message_id={mid} -> thread_id={candidate_tid}")
-            return candidate_tid
-    return thread_id
 
 
 # -------------------------
@@ -171,7 +145,14 @@ def handle_ses_event(event: dict) -> dict:
     # Compute real thread id early and use it everywhere
     thread_root = _extract_thread_root_id(eml, message_id)
     thread_id = f"thread#{thread_root}"
-    thread_id = _resolve_coord_thread_id(thread_id, eml)
+    print(
+        "[thread] thread_id=",
+        thread_id,
+        " Message-Id=",
+        eml.get("Message-Id"),
+        " In-Reply-To=",
+        eml.get("In-Reply-To"),
+    )
 
     # ---- Bedrock Guardrails (INPUT) ----
     allowed, block_msg, guardrail_resp = apply_input_guardrail(body_text)
@@ -356,13 +337,6 @@ def handle_ses_event(event: dict) -> dict:
         )
 
         outbound_msgs, schedule_plan = handler.handle(inbound)
-
-        # Safety: only schedule when all participants responded
-        if schedule_plan:
-            latest_thread = store.get(thread_id)
-            if latest_thread is None or not latest_thread.all_responded() or latest_thread.any_needs_clarification():
-                print("[coord] schedule suppressed; waiting on participants")
-                schedule_plan = None
 
         for m in outbound_msgs:
             raw_mime = build_raw_mime_text_reply(
