@@ -209,7 +209,7 @@ def _load_email_bytes_from_s3(bucket: str, message_id: str, receipt: dict) -> tu
 # Lambda handler
 # -----------------------------
 def lambda_handler(event, context):
-    print("DEPLOY_MARKER_AI_001")
+    print("DEPLOY_MARKER_AI_002")
     print("[event] records=", len(event.get("Records", [])))
 
     try:
