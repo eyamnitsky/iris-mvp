@@ -125,7 +125,7 @@ class IrisCoordinator:
         
         duration = thread.duration_minutes or thread.meeting_duration_minutes  # defaults to 30
         
-        slot = find_earliest_overlap(thread, duration_minutes=duration)
+        slot = find_earliest_overlap(thread)
         if slot is None:
             thread.status = ThreadStatus.WAITING
             # Ask for more availability from everyone
