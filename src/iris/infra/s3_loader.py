@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Tuple, Optional, List
 
 from .aws_clients import s3 as _s3
-from .email_utils import dedupe
+from ..email.email_utils import dedupe
 
 def load_email_bytes_from_s3(bucket: str, message_id: str, receipt: dict) -> Tuple[bytes, str]:
     candidate_keys: List[str] = []

@@ -6,7 +6,7 @@ from typing import Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .config import TIMEZONE
+from ..infra.config import TIMEZONE
 
 def build_ics(subject: str, start: datetime, end: datetime, organizer: str, attendees: List[str], uid: str) -> str:
     dtstamp = datetime.now(tz=ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%SZ")

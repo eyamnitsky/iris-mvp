@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Tuple, Dict
 
-from .config import DEFAULT_START_HOUR, DEFAULT_DURATION_MINUTES
+from ..infra.config import DEFAULT_START_HOUR, DEFAULT_DURATION_MINUTES
 
 def next_day_at_default_time(local_tz: ZoneInfo):
     now_local = datetime.now(tz=local_tz)

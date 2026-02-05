@@ -6,13 +6,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from botocore.exceptions import ClientError
 
-from .config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, require_env
-from .aws_clients import table as _table, ses as _ses
-from .ddb import key_for_message
-from .email_utils import flatten_emails, dedupe, safe_json, extract_plaintext_body, parse_eml
-from .s3_loader import load_email_bytes_from_s3
-from .scheduling import next_day_at_default_time, candidate_to_datetimes
-from .mime_builder import build_ics, build_raw_mime_text_reply, build_raw_mime_reply_with_ics
+from ..infra.config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, require_env
+from ..infra.aws_clients import table as _table, ses as _ses
+from ..infra.ddb import key_for_message
+from ..email.email_utils import flatten_emails, dedupe, safe_json, extract_plaintext_body, parse_eml
+from ..infra.s3_loader import load_email_bytes_from_s3
+from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
+from ..email.mime_builder import build_ics, build_raw_mime_text_reply, build_raw_mime_reply_with_ics
 
 # Backwards-compatible import (root-level shim also exists)
 from iris_ai_parser import parse_email

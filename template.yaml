@@ -58,6 +58,9 @@ Resources:
           TABLE_NAME: !Ref IrisThreadsTable
           IRIS_EMAIL: iris@liazon.cc
           TIMEZONE: America/New_York
+          BEDROCK_GUARDRAIL_ID: 4us43pe9mtte
+          BEDROCK_GUARDRAIL_VERSION: DRAFT
+          BEDROCK_REGION: us-east-1
 
       Policies:
         # Read the raw MIME email from S3
