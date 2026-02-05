@@ -42,6 +42,7 @@ class MeetingThread:
     participants: Dict[str, Participant]  # keyed by email
     timezone: str  # IANA name, e.g. "America/New_York"
     meeting_duration_minutes: int = 30
+    duration_minutes: int | None = None
     subject: str = "Meeting"
     created_at: datetime = field(default_factory=datetime.utcnow)
     availability_requests_sent_at: Optional[datetime] = None

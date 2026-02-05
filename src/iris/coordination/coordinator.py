@@ -14,6 +14,7 @@ from .templates import (
     no_overlap_email,
 )
 
+from .constraints_parser import parse_constraints
 
 @dataclass(frozen=True)
 class OutboundMessage:
@@ -70,6 +71,21 @@ class IrisCoordinator:
         p.parsed_windows = result.windows
         p.has_responded = True
 
+        # If they didn't follow the structured format, try natural-language constraints
+        if not p.parsed_windows and not result.needs_clarification:
+            windows, clar_q = parse_constraints(body_text, tz=thread.timezone)
+            if windows:
+                p.parsed_windows = windows
+            elif clar_q:
+                p.needs_clarification = True
+                p.clarification_question = clar_q
+                thread.status = ThreadStatus.NEEDS_CLARIFICATION
+                return [OutboundMessage(
+                    to=[participant_email],
+                    subject=f"{thread.subject} — quick clarification",
+                    body=clarification_email(clar_q),
+                )]
+
         if result.needs_clarification:
             p.needs_clarification = True
             p.clarification_question = result.clarification_question
@@ -107,6 +123,12 @@ class IrisCoordinator:
             thread.status = ThreadStatus.NEEDS_CLARIFICATION
             return None, []
 
+        if thread.duration_minutes is None and thread.duration_clarification_sent_at is None:
+            thread.duration_clarification_sent_at = datetime.utcnow()
+            return None, [
+                duration_clarification_email(thread.organizer_email)
+            ]
+        
         slot = find_earliest_overlap(thread)
         if slot is None:
             thread.status = ThreadStatus.WAITING

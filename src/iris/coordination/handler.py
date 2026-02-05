@@ -7,6 +7,8 @@ from .models import MeetingThread, Participant
 from .coordinator import IrisCoordinator
 from .types import OutboundMessage, SchedulePlan
 
+from .duration_parser import parse_duration_minutes
+
 
 @dataclass(frozen=True)
 class InboundEmail:
@@ -46,6 +48,11 @@ class IrisCoordinationHandler:
                     "Coordination handler called with is_new_request=True but no thread exists"
                 )
 
+            if thread.duration_minutes is None:
+                dur = parse_duration_minutes(inbound.body_text)
+                if dur:
+                    thread.duration_minutes = dur
+                    
             outbound.append(
                 self.coordinator.start_thread(thread)
             )
