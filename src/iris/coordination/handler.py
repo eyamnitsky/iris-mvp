@@ -12,6 +12,8 @@ from .types import OutboundMessage, SchedulePlan
 class InboundEmail:
     thread_id: str
     from_email: str
+    to_emails: List[str]
+    cc_emails: List[str]
     subject: str
     body_text: str
     is_new_request: bool
