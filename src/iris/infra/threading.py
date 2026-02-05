@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
-from .ddb import ensure_schema_loaded, PK_ATTR, SK_ATTR
+from . import ddb as ddb_mod
 from .config import DDB_SK_VALUE
 from .serialization import ddb_clean, ddb_sanitize
 
@@ -44,10 +44,14 @@ def extract_message_ids(eml: dict) -> List[str]:
 
 
 def _alias_key(message_id: str) -> Dict[str, Any]:
-    ensure_schema_loaded()
-    key: Dict[str, Any] = {PK_ATTR: f"alias::{message_id}"}  # type: ignore[index]
-    if SK_ATTR:
-        key[SK_ATTR] = DDB_SK_VALUE
+    ddb_mod.ensure_schema_loaded()
+    pk_attr = ddb_mod.PK_ATTR
+    sk_attr = ddb_mod.SK_ATTR
+    if not pk_attr:
+        raise RuntimeError("DDB schema not loaded (missing PK_ATTR)")
+    key: Dict[str, Any] = {pk_attr: f"alias::{message_id}"}  # type: ignore[index]
+    if sk_attr:
+        key[sk_attr] = DDB_SK_VALUE
     return key
 
 
