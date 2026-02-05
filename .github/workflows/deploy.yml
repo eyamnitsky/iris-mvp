@@ -30,7 +30,6 @@ jobs:
         run: |
           sam deploy \
             --stack-name iris-prod \
-            --no-execute-changeset \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
