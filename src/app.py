@@ -8,23 +8,27 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import uuid
 from typing import Optional
+from botocore.exceptions import ClientError
 
-# >>> NEW: import AI parser
+# --- NEW: AI parser import (module, not a Lambda) ---
 from src.iris_ai_parser import parse_email
 
-s3 = boto3.client("s3")
-ses = boto3.client("ses")
-AWS_REGION = os.environ.get("AWS_REGION")  # Lambda always sets this
+
+# -----------------------------
+# AWS clients
+# -----------------------------
+AWS_REGION = os.environ.get("AWS_REGION")  # Lambda sets this automatically
+s3 = boto3.client("s3", region_name=AWS_REGION)
+ses = boto3.client("ses", region_name=AWS_REGION)
+
+# Force DynamoDB to the Lambda region to avoid cross-region table mismatch
 ddb = boto3.resource("dynamodb", region_name=AWS_REGION)
-table = ddb.Table(TABLE_NAME)
 ddb_client = boto3.client("dynamodb", region_name=AWS_REGION)
 
-desc = ddb_client.describe_table(TableName=TABLE_NAME)["Table"]
-print("[ddb] region=", AWS_REGION)
-print("[ddb] TABLE_NAME=", TABLE_NAME)
-print("[ddb] KeySchema=", desc.get("KeySchema"))
-print("[ddb] AttrDefs=", desc.get("AttributeDefinitions"))
 
+# -----------------------------
+# Env vars (existing)
+# -----------------------------
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 TABLE_NAME = os.environ["TABLE_NAME"]
 IRIS_EMAIL = os.environ.get("IRIS_EMAIL", "iris@liazon.cc").lower()
@@ -32,7 +36,50 @@ TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
 DEFAULT_START_HOUR = int(os.environ.get("DEFAULT_START_HOUR", "13"))
 DEFAULT_DURATION_MINUTES = int(os.environ.get("DEFAULT_DURATION_MINUTES", "30"))
 
+# Optional if your table has a sort key: what fixed value to use for message rows
+DDB_SK_VALUE = os.environ.get("DDB_SK_VALUE", "STATE")
 
+
+# -----------------------------
+# DynamoDB table + schema discovery (cold start)
+# -----------------------------
+table = ddb.Table(TABLE_NAME)
+
+try:
+    _desc = ddb_client.describe_table(TableName=TABLE_NAME)["Table"]
+    _key_schema = _desc.get("KeySchema", [])
+    _attr_defs = _desc.get("AttributeDefinitions", [])
+
+    print("[ddb] region=", AWS_REGION)
+    print("[ddb] table=", TABLE_NAME)
+    print("[ddb] KeySchema=", _key_schema)
+    print("[ddb] AttrDefs=", _attr_defs)
+
+    PK_ATTR = next((k["AttributeName"] for k in _key_schema if k["KeyType"] == "HASH"), None)
+    SK_ATTR = next((k["AttributeName"] for k in _key_schema if k["KeyType"] == "RANGE"), None)
+
+    if not PK_ATTR:
+        raise RuntimeError(f"Could not determine PK attribute for table {TABLE_NAME}")
+except Exception as e:
+    # Fail hard here because idempotency relies on DDB
+    print("[ddb] describe_table failed:", repr(e))
+    raise
+
+
+def _ddb_key_for_message(message_id: str) -> dict:
+    """
+    Build the correct DynamoDB primary key for this table at runtime.
+    Supports PK-only or PK+SK tables.
+    """
+    key = {PK_ATTR: f"msg#{message_id}"}
+    if SK_ATTR:
+        key[SK_ATTR] = DDB_SK_VALUE
+    return key
+
+
+# -----------------------------
+# Helpers (existing)
+# -----------------------------
 def _flatten_emails(header_value: Optional[str]) -> list[str]:
     if not header_value:
         return []
@@ -158,8 +205,11 @@ def _load_email_bytes_from_s3(bucket: str, message_id: str, receipt: dict) -> tu
     raise last_err if last_err else RuntimeError("Failed to load email from S3")
 
 
+# -----------------------------
+# Lambda handler
+# -----------------------------
 def lambda_handler(event, context):
-    print("DEPLOY_MARKER_002")
+    print("DEPLOY_MARKER_AI_001")
     print("[event] records=", len(event.get("Records", [])))
 
     try:
@@ -171,10 +221,10 @@ def lambda_handler(event, context):
         message_id = mail.get("messageId") or str(uuid.uuid4())
         print(f"[ses] messageId={message_id}")
 
-        pk = f"msg#{message_id}"
-        existing = table.get_item(Key={"pk": pk}).get("Item")
+        # --- DDB idempotency check (FIXED to match table schema) ---
+        existing = table.get_item(Key=_ddb_key_for_message(message_id)).get("Item")
         if existing and existing.get("invite_sent_at"):
-            print(f"[ddb] idempotent skip pk={pk}")
+            print(f"[ddb] idempotent skip message_id={message_id}")
             return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": True})}
 
         raw_bytes, used_key = _load_email_bytes_from_s3(BUCKET_NAME, message_id, receipt)
@@ -189,10 +239,11 @@ def lambda_handler(event, context):
         to_emails = _flatten_emails(eml.get("To"))
         cc_emails = _flatten_emails(eml.get("Cc"))
 
+        # Only respond when Iris is CC'd (existing behavior)
         if IRIS_EMAIL not in [e.lower() for e in cc_emails]:
             return {"statusCode": 200, "body": json.dumps({"ok": True, "ignored": "iris_not_cc"})}
 
-        # >>> NEW: extract plain text body for AI
+        # Extract text body (plain text)
         body_text = ""
         if eml.is_multipart():
             for part in eml.walk():
@@ -202,20 +253,23 @@ def lambda_handler(event, context):
         else:
             body_text = eml.get_content()
 
-        # >>> NEW: call AI parser (NO behavior change yet)
-        ai_result = parse_email(
-            {
-                "thread_id": f"thread#{message_id}",
-                "message_id": message_id,
-                "body_text": body_text,
-                "timezone_default": TIMEZONE,
-            }
-        )
+        # --- NEW: invoke AI parser and log result (NO behavior change yet) ---
+        try:
+            ai_result = parse_email(
+                {
+                    "thread_id": f"thread#{message_id}",
+                    "message_id": message_id,
+                    "body_text": body_text,
+                    "timezone_default": TIMEZONE,
+                }
+            )
+            print("[ai] result=", _safe_json(ai_result))
+        except Exception as e:
+            # Do not break scheduling if AI fails (for now)
+            print("[ai] ERROR (ignored for now):", repr(e))
+            ai_result = None
 
-        print("[ai] parsed=", _safe_json(ai_result))
-
-        # ---- EXISTING BEHAVIOR CONTINUES UNCHANGED ----
-
+        # ---- EXISTING scheduling behavior remains unchanged ----
         tz = ZoneInfo(TIMEZONE)
         start, end = _next_day_at_default_time(tz)
 
@@ -247,9 +301,10 @@ def lambda_handler(event, context):
             RawMessage={"Data": raw_mime},
         )
 
-        table.put_item(
-            Item={
-                "pk": pk,
+        # --- DDB write (FIXED key schema) ---
+        item = _ddb_key_for_message(message_id)
+        item.update(
+            {
                 "subject": subject,
                 "from_email": from_email,
                 "to_emails": set(to_emails),
@@ -260,9 +315,13 @@ def lambda_handler(event, context):
                 "invite_sent_at": datetime.utcnow().isoformat() + "Z",
             }
         )
+        table.put_item(Item=item)
 
         return {"statusCode": 200, "body": json.dumps({"ok": True})}
 
+    except ClientError as e:
+        print("[error] ClientError", repr(e))
+        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
     except Exception as e:
         print("[error]", repr(e))
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
