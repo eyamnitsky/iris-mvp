@@ -166,15 +166,8 @@ def _next_day_at_default_time(local_tz: ZoneInfo):
     return start, end
 
 
-_DOW = {
-    "mon": 0, "monday": 0,
-    "tue": 1, "tues": 1, "tuesday": 1,
-    "wed": 2, "wednesday": 2,
-    "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
-    "fri": 4, "friday": 4,
-    "sat": 5, "saturday": 5,
-    "sun": 6, "sunday": 6,
-}
+# 3-letter day-of-week keys only
+_DOW = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 def _next_weekday_date(today_local: datetime, target_wd: int) -> datetime:
@@ -201,22 +194,36 @@ def _parse_time_12h(s: str) -> tuple[int, int]:
 
 
 def _candidate_to_datetimes(candidate: dict, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """
+    Convert candidate like:
+      start_local: 'Saturday 3:00 PM'
+      end_local:   'Saturday 3:30 PM' OR '3:30 PM'
+    into timezone-aware datetimes.
+    """
     start_local = (candidate.get("start_local") or "").strip()
     end_local = (candidate.get("end_local") or "").strip()
     if not start_local or not end_local:
         raise ValueError("Missing start_local/end_local")
 
-    mday = re.search(r"\b(mon|tues|tue|wed|thu|thur|thurs|fri|sat|sun)(day)?\b", start_local, re.IGNORECASE)
+    # FIX: match full day names too (Saturday/Sunday/etc.)
+    mday = re.search(
+        r"\b(mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b",
+        start_local,
+        re.IGNORECASE,
+    )
     if not mday:
         raise ValueError(f"No weekday found in start_local: {start_local}")
 
-    wd = mday.group(0).lower()
-    wd = wd.replace("day", "") if wd.endswith("day") else wd
-    target_wd = _DOW.get(wd, None)
-    if target_wd is None:
-        target_wd = _DOW.get(mday.group(0).lower(), None)
-    if target_wd is None:
-        raise ValueError(f"Unknown weekday in: {start_local}")
+    wd = mday.group(1).lower()  # e.g. 'saturday' or 'sat'
+    # normalize to 3-letter key
+    if wd.startswith("tue"):
+        wd_key = "tue"
+    elif wd.startswith("thu"):
+        wd_key = "thu"
+    else:
+        wd_key = wd[:3]
+
+    target_wd = _DOW[wd_key]
 
     now_local = datetime.now(tz=tz)
     base = _next_weekday_date(now_local, target_wd)
@@ -285,7 +292,6 @@ def _build_raw_mime_text_reply(
         msg["In-Reply-To"] = in_reply_to
     if references:
         msg["References"] = references
-
     msg.set_content(text_body)
     return msg.as_bytes(policy=policy.SMTP)
 
@@ -309,7 +315,6 @@ def _build_raw_mime_reply_with_ics(
         msg["References"] = references
 
     msg.set_content(text_body)
-
     msg.add_attachment(
         ics_body.encode("utf-8"),
         maintype="text",
@@ -317,7 +322,6 @@ def _build_raw_mime_reply_with_ics(
         filename="invite.ics",
         params={"method": "REQUEST"},
     )
-
     return msg.as_bytes(policy=policy.SMTP)
 
 
@@ -325,7 +329,7 @@ def _build_raw_mime_reply_with_ics(
 # Lambda handler
 # -----------------------------
 def lambda_handler(event, context):
-    print("DEPLOY_MARKER_AI_SCHEDULE_001")
+    print("DEPLOY_MARKER_AI_SCHEDULE_002")
     print("[event] records=", len(event.get("Records", [])))
 
     try:
@@ -376,9 +380,9 @@ def lambda_handler(event, context):
 
         ai_parsed = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
 
-        # ---- Decision: clarify vs schedule ----
         reply_recipients = _dedupe([from_email] + to_emails + cc_emails)
 
+        # ---- Clarification path: email question only, no ICS ----
         if ai_parsed and ai_parsed.get("needs_clarification"):
             clar_q = (ai_parsed.get("clarifying_question") or "What day and time works for you?").strip()
             text_body_reply = clar_q + "\n"
@@ -408,14 +412,14 @@ def lambda_handler(event, context):
                     "s3_key": used_key,
                     "received_at": datetime.utcnow().isoformat() + "Z",
                     "clarification_sent_at": datetime.utcnow().isoformat() + "Z",
-                    "ai": ai_parsed,
+                    "ai_json": json.dumps(ai_parsed),
                 }
             )
             table.put_item(Item=item)
 
             return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "clarify"})}
 
-        # Schedule using AI candidate if available; else fallback
+        # ---- Scheduling path: use AI candidate if present; else fallback ----
         tz = ZoneInfo(TIMEZONE)
         start, end = _next_day_at_default_time(tz)
 
@@ -438,7 +442,6 @@ def lambda_handler(event, context):
             uid=event_uid,
         )
 
-        # User-facing message
         try:
             pretty_when = start.strftime("%A %I:%M %p").lstrip("0")
         except Exception:
@@ -472,7 +475,7 @@ def lambda_handler(event, context):
                 "received_at": datetime.utcnow().isoformat() + "Z",
                 "event_uid": event_uid,
                 "invite_sent_at": datetime.utcnow().isoformat() + "Z",
-                "ai": ai_parsed,
+                "ai_json": json.dumps(ai_parsed) if ai_parsed else "{}",
                 "scheduled_start": start.isoformat(),
                 "scheduled_end": end.isoformat(),
             }
