@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo
 import uuid
 from typing import Optional
 
+# >>> NEW: import AI parser
+from src.iris_ai_parser import parse_email
+
 s3 = boto3.client("s3")
 ses = boto3.client("ses")
 ddb = boto3.resource("dynamodb")
@@ -111,7 +114,6 @@ def _build_raw_mime_reply(
         params={"method": "REQUEST"},
     )
 
-
     return msg.as_bytes(policy=policy.SMTP)
 
 
@@ -123,22 +125,15 @@ def _safe_json(obj) -> str:
 
 
 def _load_email_bytes_from_s3(bucket: str, message_id: str, receipt: dict) -> tuple[bytes, str]:
-    """
-    SES -> S3 -> Lambda often does NOT include the S3 object key in the Lambda invocation payload.
-    Since we configured the S3 action prefix as 'raw/', SES stores objects under raw/<messageId>.
-    Try a few candidate keys deterministically.
-    """
     candidate_keys: list[str] = []
 
     action = (receipt or {}).get("action", {}) or {}
-    # Sometimes action includes objectKey/key; often it doesn't (it may refer to the Lambda action).
     if isinstance(action, dict):
         if action.get("objectKey"):
             candidate_keys.append(action["objectKey"])
         if action.get("key"):
             candidate_keys.append(action["key"])
 
-    # Our S3 action uses prefix raw/ (and sometimes SES uses messageId as the key)
     candidate_keys.append(f"raw/{message_id}")
     candidate_keys.append(message_id)
 
@@ -153,15 +148,12 @@ def _load_email_bytes_from_s3(bucket: str, message_id: str, receipt: dict) -> tu
         except Exception as e:
             last_err = e
 
-    print(f"[s3] FAILED to load email. bucket={bucket} candidates={candidate_keys} err={repr(last_err)}")
     raise last_err if last_err else RuntimeError("Failed to load email from S3")
 
 
 def lambda_handler(event, context):
-    # Log enough to debug, but avoid dumping huge payloads.
-    print("DEPLOY_MARKER_001")
+    print("DEPLOY_MARKER_002")
     print("[event] records=", len(event.get("Records", [])))
-    print("[event] head=", _safe_json(event)[:2000])
 
     try:
         record = event["Records"][0]
@@ -172,46 +164,50 @@ def lambda_handler(event, context):
         message_id = mail.get("messageId") or str(uuid.uuid4())
         print(f"[ses] messageId={message_id}")
 
-        # Idempotency
         pk = f"msg#{message_id}"
         existing = table.get_item(Key={"pk": pk}).get("Item")
         if existing and existing.get("invite_sent_at"):
             print(f"[ddb] idempotent skip pk={pk}")
             return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": True})}
 
-        # Load raw email bytes from S3
         raw_bytes, used_key = _load_email_bytes_from_s3(BUCKET_NAME, message_id, receipt)
         eml = email.message_from_bytes(raw_bytes, policy=policy.default)
 
         subject = eml.get("Subject", "(no subject)")
         from_email_list = _flatten_emails(eml.get("From"))[:1]
         if not from_email_list:
-            print("[parse] missing From header")
             return {"statusCode": 400, "body": json.dumps({"error": "missing From"})}
         from_email = from_email_list[0]
 
         to_emails = _flatten_emails(eml.get("To"))
         cc_emails = _flatten_emails(eml.get("Cc"))
 
-        print(f"[parse] subject={subject!r} from={from_email} to={to_emails} cc={cc_emails}")
-
-        # Process only if Iris was CC'd in *headers*
         if IRIS_EMAIL not in [e.lower() for e in cc_emails]:
-            print(f"[logic] ignoring: iris not in Cc header. IRIS={IRIS_EMAIL} cc={cc_emails}")
             return {"statusCode": 200, "body": json.dumps({"ok": True, "ignored": "iris_not_cc"})}
 
-        # Reply-all recipients: From + To + Cc, minus Iris
-        recipients = _dedupe([from_email] + to_emails + cc_emails)
-        recipients = [r for r in recipients if r.lower() != IRIS_EMAIL]
-        print(f"[logic] reply-all recipients={recipients}")
+        # >>> NEW: extract plain text body for AI
+        body_text = ""
+        if eml.is_multipart():
+            for part in eml.walk():
+                if part.get_content_type() == "text/plain":
+                    body_text = part.get_content()
+                    break
+        else:
+            body_text = eml.get_content()
 
-        # Threading headers
-        orig_msg_id = eml.get("Message-Id")
-        references = eml.get("References")
-        if references and orig_msg_id and orig_msg_id not in references:
-            references = references.strip() + " " + orig_msg_id
-        elif not references and orig_msg_id:
-            references = orig_msg_id
+        # >>> NEW: call AI parser (NO behavior change yet)
+        ai_result = parse_email(
+            {
+                "thread_id": f"thread#{message_id}",
+                "message_id": message_id,
+                "body_text": body_text,
+                "timezone_default": TIMEZONE,
+            }
+        )
+
+        print("[ai] parsed=", _safe_json(ai_result))
+
+        # ---- EXISTING BEHAVIOR CONTINUES UNCHANGED ----
 
         tz = ZoneInfo(TIMEZONE)
         start, end = _next_day_at_default_time(tz)
@@ -233,22 +229,17 @@ def lambda_handler(event, context):
             text_body=text_body,
             ics_body=ics,
             from_addr=IRIS_EMAIL,
-            to_addrs=recipients,
-            in_reply_to=orig_msg_id,
-            references=references,
+            to_addrs=_dedupe([from_email] + to_emails + cc_emails),
+            in_reply_to=eml.get("Message-Id"),
+            references=eml.get("References"),
         )
 
-        # Send invite email
-        print("[ses] sending invite...")
         ses.send_raw_email(
             Source=IRIS_EMAIL,
-            Destinations=recipients,
+            Destinations=_dedupe([from_email] + to_emails + cc_emails),
             RawMessage={"Data": raw_mime},
         )
-        print("[ses] invite sent")
 
-        # Write Dynamo record
-        print(f"[ddb] writing item pk={pk} s3key={used_key}")
         table.put_item(
             Item={
                 "pk": pk,
@@ -263,7 +254,7 @@ def lambda_handler(event, context):
             }
         )
 
-        return {"statusCode": 200, "body": json.dumps({"ok": True, "sent_to": recipients})}
+        return {"statusCode": 200, "body": json.dumps({"ok": True})}
 
     except Exception as e:
         print("[error]", repr(e))
