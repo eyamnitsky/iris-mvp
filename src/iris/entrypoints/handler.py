@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 import re
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 from botocore.exceptions import ClientError
@@ -18,13 +18,13 @@ from ..email.mime_builder import build_ics, build_raw_mime_text_reply, build_raw
 from ..conversation.engine import process_incoming_email
 from ..conversation.guardrails import apply_input_guardrail
 
-# Coordination
-from ..coordination.handler import IrisCoordinationHandler, InboundEmail
-from ..coordination.models import MeetingThread, Participant, TimeWindow
-
 # Backwards-compatible import (root-level shim also exists)
 from iris_ai_parser import parse_email
 
+
+# -------------------------
+# DynamoDB float hardening
+# -------------------------
 
 def deep_decimalize(x):
     """Convert floats to Decimal recursively (DynamoDB-safe)."""
@@ -44,6 +44,10 @@ def ddb_sanitize(item: dict) -> dict:
     return deep_decimalize(item)
 
 
+# -------------------------
+# Thread identification
+# -------------------------
+
 def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
     """Best-effort thread identifier using References/In-Reply-To, else message_id."""
     def _first_msgid(value: str) -> str:
@@ -61,13 +65,21 @@ def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
         root = _first_msgid(str(irt))
     if not root:
         root = fallback_message_id
+
     return root.replace("\n", "").replace("\r", "").strip()
 
 
+# -------------------------
+# Coordination state store
+# (DDB keyed by threadId)
+# -------------------------
+
 class _DdbCoordinationStore:
     """
-    Store one coordination thread state item per threadId in your existing table.
-    This matches your DynamoDB screenshot (partition key is threadId).
+    Stores a coordination thread as a single item:
+      threadId (PK) = thread_id
+      record_type = "COORDINATION_THREAD"
+      coordination_json = JSON blob
     """
     def __init__(self, table):
         self._table = table
@@ -80,22 +92,29 @@ class _DdbCoordinationStore:
         if item.get("record_type") != "COORDINATION_THREAD":
             return None
 
+        # Lazy import to avoid circular imports at cold start
+        from ..coordination.models import MeetingThread, Participant, TimeWindow
+
         data = json.loads(item.get("coordination_json", "{}") or "{}")
 
         participants: dict[str, Participant] = {}
         for email, pd in (data.get("participants") or {}).items():
+            windows = []
+            for w in (pd.get("parsed_windows") or []):
+                # w["day"] is ISO date like "2026-02-11"
+                windows.append(
+                    TimeWindow(
+                        day=date.fromisoformat(w["day"]),
+                        start_minute=int(w["start_minute"]),
+                        end_minute=int(w["end_minute"]),
+                    )
+                )
+
             participants[email] = Participant(
                 email=email,
                 has_responded=bool(pd.get("has_responded")),
                 raw_response_text=pd.get("raw_response_text"),
-                parsed_windows=[
-                    TimeWindow(
-                        day=datetime.fromisoformat(w["day"]).date(),
-                        start_minute=int(w["start_minute"]),
-                        end_minute=int(w["end_minute"]),
-                    )
-                    for w in (pd.get("parsed_windows") or [])
-                ],
+                parsed_windows=windows,
                 needs_clarification=bool(pd.get("needs_clarification")),
                 clarification_question=pd.get("clarification_question"),
                 responded_at=datetime.fromisoformat(pd["responded_at"]) if pd.get("responded_at") else None,
@@ -109,6 +128,7 @@ class _DdbCoordinationStore:
             meeting_duration_minutes=int(data.get("meeting_duration_minutes", 30)),
             subject=data.get("subject", "Meeting"),
         )
+
         thread.status = data.get("status", thread.status)
         thread.availability_requests_sent_at = (
             datetime.fromisoformat(data["availability_requests_sent_at"])
@@ -120,11 +140,14 @@ class _DdbCoordinationStore:
         thread.scheduling_rationale = data.get("scheduling_rationale")
         return thread
 
-    def put(self, thread: MeetingThread) -> None:
+    def put(self, thread) -> None:
+        # Lazy import to avoid circular imports at cold start
+        from ..coordination.models import TimeWindow
+
         def tw_to_dict(tw: TimeWindow) -> dict:
             return {"day": tw.day.isoformat(), "start_minute": tw.start_minute, "end_minute": tw.end_minute}
 
-        def p_to_dict(p: Participant) -> dict:
+        def p_to_dict(p) -> dict:
             return {
                 "email": p.email,
                 "has_responded": p.has_responded,
@@ -161,8 +184,12 @@ class _DdbCoordinationStore:
         )
 
 
+# -------------------------
+# Main handler
+# -------------------------
+
 def handle_ses_event(event: dict) -> dict:
-    print("DEPLOY_MARKER_COORD_004")
+    print("DEPLOY_MARKER_ENTRYPOINT_REWRITE_001")
 
     record = event["Records"][0]
     ses_payload = record.get("ses", {}) or {}
@@ -172,7 +199,7 @@ def handle_ses_event(event: dict) -> dict:
     message_id = mail.get("messageId") or str(uuid.uuid4())
     print(f"[ses] messageId={message_id}")
 
-    # ---- DDB idempotency ----
+    # Idempotency (skip if already handled)
     ddb_key = key_for_message(message_id)
     existing = _table().get_item(Key=ddb_key).get("Item")
     if existing and (existing.get("invite_sent_at") or existing.get("clarification_sent_at") or existing.get("guardrail_blocked_at")):
@@ -183,6 +210,7 @@ def handle_ses_event(event: dict) -> dict:
     eml = parse_eml(raw_bytes)
 
     subject = eml.get("Subject", "(no subject)")
+
     from_email_list = flatten_emails(eml.get("From"))[:1]
     if not from_email_list:
         return {"statusCode": 400, "body": json.dumps({"error": "missing From"})}
@@ -191,14 +219,13 @@ def handle_ses_event(event: dict) -> dict:
     to_emails = flatten_emails(eml.get("To"))
     cc_emails = flatten_emails(eml.get("Cc"))
 
-    # reply recipients
     reply_recipients = dedupe([from_email] + to_emails + cc_emails)
 
-    # Ignore messages sent BY Iris
+    # Avoid loops
     if from_email.lower() == IRIS_EMAIL.lower():
         return {"statusCode": 200, "body": json.dumps({"ok": True, "ignored": "from_iris"})}
 
-    # Process if Iris is in To or Cc
+    # Only handle if Iris is in To or Cc
     to_set = {e.lower() for e in to_emails}
     cc_set = {e.lower() for e in cc_emails}
     if IRIS_EMAIL.lower() not in to_set and IRIS_EMAIL.lower() not in cc_set:
@@ -206,11 +233,11 @@ def handle_ses_event(event: dict) -> dict:
 
     body_text = extract_plaintext_body(eml)
 
-    # Thread id early (use the same thread id everywhere)
+    # Thread id early
     thread_root = _extract_thread_root_id(eml, message_id)
     thread_id = f"thread#{thread_root}"
 
-    # ---- Guardrails ----
+    # Guardrails
     allowed, block_msg, guardrail_resp = apply_input_guardrail(body_text)
     if not allowed:
         text_body_reply = (block_msg or "").strip() + "\n"
@@ -240,7 +267,7 @@ def handle_ses_event(event: dict) -> dict:
         _table().put_item(Item=ddb_sanitize(item))
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "guardrail_blocked"})}
 
-    # ---- AI parse (note: use real thread_id, not thread#message_id) ----
+    # AI parse
     ai_result = parse_email({
         "thread_id": thread_id,
         "message_id": message_id,
@@ -249,18 +276,25 @@ def handle_ses_event(event: dict) -> dict:
     })
     print("[ai] result=", safe_json(ai_result))
 
-    ai_parsed = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
-    ai_parsed = deep_decimalize(ai_parsed) if ai_parsed else None  # prevents floats from reaching DDB
+    ai_parsed_raw = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
+    # Critical: decimalize before it ever hits your engine or DDB
+    ai_parsed = deep_decimalize(ai_parsed_raw) if ai_parsed_raw else None
 
-    # ---- Participants for coordination routing ----
+    # Participants for routing (include sender; exclude Iris)
     participants_all = dedupe([from_email] + to_emails + cc_emails)
     participants_all = [e for e in participants_all if e and e.lower() != IRIS_EMAIL.lower()]
     is_multi = len(participants_all) >= 2
     print("[coord] participants_all=", participants_all)
     print("[coord] is_multi=", is_multi)
 
-    # ---- Multi-participant coordination path ----
+    # -------------------------
+    # Multi-participant flow
+    # -------------------------
     if is_multi:
+        # Lazy imports to avoid circular imports at cold start
+        from ..coordination.handler import IrisCoordinationHandler, InboundEmail
+        from ..coordination.models import MeetingThread, Participant
+
         store = _DdbCoordinationStore(_table())
         coord_thread = store.get(thread_id)
 
@@ -326,7 +360,7 @@ def handle_ses_event(event: dict) -> dict:
             )
             _ses().send_raw_email(Source=IRIS_EMAIL, Destinations=attendees, RawMessage={"Data": raw_mime})
 
-        # Record the message (DDB-safe)
+        # Message record (store AI as string to avoid future DDB type issues)
         item = key_for_message(message_id)
         item.update({
             "record_type": "MESSAGE",
@@ -337,14 +371,16 @@ def handle_ses_event(event: dict) -> dict:
             "cc_emails": set(cc_emails),
             "s3_key": used_key,
             "received_at": datetime.utcnow().isoformat() + "Z",
-            "ai_json": json.dumps(ai_result.get("parsed") or {}) if ai_result.get("ok") else "{}",
+            "ai_json": json.dumps(ai_parsed_raw or {}) if ai_result.get("ok") else "{}",
             "coord_action": "handled_multi",
         })
         _table().put_item(Item=ddb_sanitize(item))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "coordination"})}
 
-    # ---- Single-participant conversation engine ----
+    # -------------------------
+    # Single-participant flow
+    # -------------------------
     thread_state, decision = process_incoming_email(
         table=_table(),
         thread_id=thread_id,
@@ -358,10 +394,28 @@ def handle_ses_event(event: dict) -> dict:
         return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": True})}
 
     if decision.action == "clarify":
-        text_body_reply = (decision.reply_text or "What day and time would you like to schedule this meeting for?").strip() + "\n"
+        # Better clarification prompt with examples + flexible constraints
+        default_prompt = (
+            "Sure — what time should I schedule this?\n\n"
+            "You can reply in either of these ways:\n\n"
+            "A) Specific time slot (preferred)\n"
+            "MM/DD: start–end (timezone)\n"
+            "Examples:\n"
+            "02/11: 1pm–2pm ET\n"
+            "02/12: 09:30–10:00 PT\n\n"
+            "B) Flexible constraints (also OK)\n"
+            "- “Any afternoon Mon–Tue next week”\n"
+            "- “Any time after 3pm on Wednesday”\n"
+            "- “Any 30 min slot Tue–Thu between 10am–4pm PT”\n"
+        )
+        if decision.reply_text and decision.reply_text.strip():
+            text_body_reply = decision.reply_text.strip() + "\n\n" + default_prompt
+        else:
+            text_body_reply = default_prompt
+
         raw_mime = build_raw_mime_text_reply(
             subject=f"Re: {subject}",
-            text_body=text_body_reply,
+            text_body=text_body_reply.rstrip() + "\n",
             from_addr=IRIS_EMAIL,
             to_addrs=reply_recipients,
             in_reply_to=eml.get("Message-Id"),
@@ -380,7 +434,7 @@ def handle_ses_event(event: dict) -> dict:
             "s3_key": used_key,
             "received_at": datetime.utcnow().isoformat() + "Z",
             "clarification_sent_at": datetime.utcnow().isoformat() + "Z",
-            "ai_json": json.dumps(ai_result.get("parsed") or {}) if ai_result.get("ok") else "{}",
+            "ai_json": json.dumps(ai_parsed_raw or {}) if ai_result.get("ok") else "{}",
             "conv_state": thread_state.state,
             "conv_intent": thread_state.intent,
             "conv_question": decision.reply_text,
@@ -433,7 +487,7 @@ def handle_ses_event(event: dict) -> dict:
         "received_at": datetime.utcnow().isoformat() + "Z",
         "event_uid": event_uid,
         "invite_sent_at": datetime.utcnow().isoformat() + "Z",
-        "ai_json": json.dumps(ai_result.get("parsed") or {}) if ai_result.get("ok") else "{}",
+        "ai_json": json.dumps(ai_parsed_raw or {}) if ai_result.get("ok") else "{}",
         "conv_state": thread_state.state,
         "conv_intent": thread_state.intent,
         "scheduled_start": start.isoformat(),
