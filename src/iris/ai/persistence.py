@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from botocore.exceptions import ClientError
 
 from .config import PK_NAME, SK_NAME, STATE_VALUE
+from ..infra.serialization import to_ddb_safe
 
 def ddb_key(thread_id: str) -> Dict[str, Any]:
     key = {PK_NAME: thread_id}
@@ -66,6 +67,6 @@ def ddb_upsert_case(table, thread_id: str, message_id: str, parsed: Dict[str, An
         Key=ddb_key(thread_id),
         UpdateExpression=" ".join(expr),
         ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
+        ExpressionAttributeValues=to_ddb_safe(values),
     )
     print("DDB_UPSERT_OK:", thread_id, message_id)

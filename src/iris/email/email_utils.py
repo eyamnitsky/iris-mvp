@@ -6,6 +6,7 @@ from email.utils import getaddresses
 import email
 from email import policy
 
+from ..infra.serialization import to_json_safe
 def flatten_emails(header_value: Optional[str]) -> List[str]:
     if not header_value:
         return []
@@ -24,7 +25,7 @@ def dedupe(seq: List[str]) -> List[str]:
 
 def safe_json(obj) -> str:
     try:
-        return json.dumps(obj, default=str)
+        return json.dumps(to_json_safe(obj), default=str)
     except Exception:
         return "<unserializable>"
 

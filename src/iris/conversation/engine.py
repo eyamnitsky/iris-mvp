@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from ..infra import ddb as ddb_mod
 from ..infra.config import DDB_SK_VALUE
+from ..infra.serialization import to_ddb_safe, to_json_safe
 
 from .context import IrisContext, ConversationState, Intent
 from .parsing import infer_intent
@@ -158,10 +159,10 @@ def process_incoming_email(
             "timezone": tz,
             "last_message_id": message_id,
             "last_candidate": last_candidate or {},
-            "last_ai_json": json.dumps(ai_parsed) if ai_parsed else "{}",
+            "last_ai_json": json.dumps(to_json_safe(ai_parsed)) if ai_parsed else "{}",
         }
     )
-    table.put_item(Item=thread_item)
+    table.put_item(Item=to_ddb_safe(thread_item))
 
     thread_state = ThreadState(
         thread_id=thread_id,

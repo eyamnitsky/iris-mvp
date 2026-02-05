@@ -5,12 +5,12 @@ import uuid
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from decimal import Decimal
 from botocore.exceptions import ClientError
 
 from ..infra.config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, require_env
 from ..infra.aws_clients import table as _table, ses as _ses
 from ..infra.ddb import key_for_message
+from ..infra.serialization import to_ddb_safe, to_json_safe
 from ..email.email_utils import flatten_emails, dedupe, safe_json, extract_plaintext_body, parse_eml
 from ..infra.s3_loader import load_email_bytes_from_s3
 from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
@@ -20,28 +20,6 @@ from ..conversation.guardrails import apply_input_guardrail
 
 # Backwards-compatible import (root-level shim also exists)
 from iris_ai_parser import parse_email
-
-
-# -------------------------
-# DynamoDB float hardening
-# -------------------------
-
-def deep_decimalize(x):
-    """Convert floats to Decimal recursively (DynamoDB-safe)."""
-    if isinstance(x, float):
-        return Decimal(str(x))
-    if isinstance(x, dict):
-        return {k: deep_decimalize(v) for k, v in x.items()}
-    if isinstance(x, list):
-        return [deep_decimalize(v) for v in x]
-    if isinstance(x, tuple):
-        return [deep_decimalize(v) for v in x]
-    return x
-
-
-def ddb_sanitize(item: dict) -> dict:
-    """Ensure no floats make it into DynamoDB items."""
-    return deep_decimalize(item)
 
 
 # -------------------------
@@ -100,7 +78,7 @@ def _coord_put(thread_id: str, coordination_json: str) -> None:
         "updated_at": datetime.utcnow().isoformat() + "Z",
         "coordination_json": coordination_json,
     })
-    _table().put_item(Item=ddb_sanitize(item))
+    _table().put_item(Item=to_ddb_safe(item))
 
 
 # -------------------------
@@ -193,9 +171,9 @@ def handle_ses_event(event: dict) -> dict:
             "s3_key": used_key,
             "received_at": datetime.utcnow().isoformat() + "Z",
             "guardrail_blocked_at": datetime.utcnow().isoformat() + "Z",
-            "guardrail_json": json.dumps(guardrail_resp) if guardrail_resp else "{}",
+            "guardrail_json": json.dumps(to_json_safe(guardrail_resp)) if guardrail_resp else "{}",
         })
-        _table().put_item(Item=ddb_sanitize(item))
+        _table().put_item(Item=to_ddb_safe(item))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "guardrail_blocked"})}
 
@@ -209,7 +187,7 @@ def handle_ses_event(event: dict) -> dict:
     print("[ai] result=", safe_json(ai_result))
 
     ai_parsed_raw = (ai_result.get("parsed") or {}) if ai_result.get("ok") else None
-    ai_parsed = deep_decimalize(ai_parsed_raw) if ai_parsed_raw else None  # critical for DDB + engine safety
+    ai_parsed = to_ddb_safe(ai_parsed_raw) if ai_parsed_raw else None  # critical for DDB + engine safety
 
     # ---- Multi participant routing (deterministic) ----
     participants_all = dedupe([from_email] + to_emails + cc_emails)
@@ -303,7 +281,7 @@ def handle_ses_event(event: dict) -> dict:
                     "scheduled_end": thread.scheduled_end.isoformat() if thread.scheduled_end else None,
                     "scheduling_rationale": thread.scheduling_rationale,
                 }
-                _coord_put(thread.thread_id, json.dumps(data))
+                _coord_put(thread.thread_id, json.dumps(to_json_safe(data)))
 
         store = _StoreAdapter()
         coord_thread = store.get(thread_id)
@@ -384,7 +362,7 @@ def handle_ses_event(event: dict) -> dict:
             "ai_raw": ai_result.get("raw") if isinstance(ai_result, dict) else None,
             "coord_action": "handled_multi",
         })
-        _table().put_item(Item=ddb_sanitize(item))
+        _table().put_item(Item=to_ddb_safe(item))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "coordination"})}
 
@@ -455,7 +433,7 @@ def handle_ses_event(event: dict) -> dict:
             "conv_intent": thread_state.intent,
             "conv_question": decision.reply_text,
         })
-        _table().put_item(Item=ddb_sanitize(item))
+        _table().put_item(Item=to_ddb_safe(item))
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "clarify"})}
 
@@ -520,7 +498,7 @@ def handle_ses_event(event: dict) -> dict:
         "scheduled_start": start.isoformat(),
         "scheduled_end": end.isoformat(),
     })
-    _table().put_item(Item=ddb_sanitize(item))
+    _table().put_item(Item=to_ddb_safe(item))
 
     return {"statusCode": 200, "body": json.dumps({"ok": True, "action": "scheduled"})}
 
