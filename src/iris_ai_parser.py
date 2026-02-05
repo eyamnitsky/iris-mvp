@@ -197,6 +197,16 @@ Output:
   ]
 }}
 
+Email: "No, that time doesn't work."
+Output:
+{{
+  "intent": "DECLINE",
+  "needs_clarification": true,
+  "clarifying_question": "What day and time works for you instead?",
+  "timezone": "{tz_default}",
+  "candidates": []
+}}
+
 --------------------
 TASK
 --------------------
@@ -292,9 +302,7 @@ def validate_result(obj: Any, tz_default: str) -> Dict[str, Any]:
 
     # --- FIX 2 (deterministic override) ---
     # If we have a concrete day + time, do not ask "what time" again.
-    # Also treat "around 2" as concrete-enough IF the candidate includes a day and a plausible hour.
     day_re = re.compile(r"\b(Mon|Tues|Tue|Wed|Thu|Thurs|Fri|Sat|Sun)(day)?\b", re.IGNORECASE)
-    # Matches times like "2", "2:30", "2pm", "2 PM", "14:00" (but we focus on 1-12 here)
     hour_re = re.compile(r"\b([1-9]|1[0-2])(?:\:\d{2})?\b")
     ampm_re = re.compile(r"\b(am|pm)\b", re.IGNORECASE)
     aroundish_re = re.compile(r"\b(around|about|approx|~|ish)\b", re.IGNORECASE)
@@ -308,12 +316,10 @@ def validate_result(obj: Any, tz_default: str) -> Dict[str, Any]:
         if not day_re.search(start_local):
             continue
 
-        # If it has explicit AM/PM, definitely a concrete time.
         if ampm_re.search(text) and hour_re.search(text):
             has_day_and_time = True
             break
 
-        # If it's "around/about/ish" + an hour (e.g., "around 2"), treat as concrete-enough.
         if aroundish_re.search(text) and hour_re.search(text):
             has_day_and_time = True
             break
@@ -322,11 +328,9 @@ def validate_result(obj: Any, tz_default: str) -> Dict[str, Any]:
         obj["needs_clarification"] = False
         obj["clarifying_question"] = ""
     else:
-        # If model said no clarification, keep question empty; otherwise keep its question
         if obj["needs_clarification"] is False:
             obj["clarifying_question"] = obj.get("clarifying_question", "") or ""
 
-        # Safety: if no candidates and no clarification, force clarification
         if not obj["candidates"] and obj["needs_clarification"] is False:
             obj["needs_clarification"] = True
             obj["clarifying_question"] = safe["clarifying_question"]
@@ -431,37 +435,59 @@ def ddb_upsert_case(table, thread_id: str, message_id: str, parsed: Dict[str, An
 
 
 # -----------------------------
-# Lambda handler
+# Public API for app.py
 # -----------------------------
-def lambda_handler(event, context):
+def parse_email(event: dict) -> dict:
     """
-    Test event example:
-    {
-      "thread_id":"thread-demo-001",
-      "message_id":"msg-001",
-      "body_text":"Tuesday around 2ish works for me."
-    }
+    App-facing wrapper used by your main app.py.
+    Expected event keys:
+      - body_text (str)
+      - thread_id (str) optional
+      - message_id (str) optional
+      - timezone_default (str) optional
+    Returns:
+      {
+        ok: bool,
+        thread_id: str,
+        message_id: str,
+        parsed: {...},
+        raw: str (only when ok=True),
+        error: str (only when ok=False)
+      }
     """
-    body_text = event.get("body_text", "") or "Tuesday around 2 works for me."
+    body_text = event.get("body_text", "") or ""
     thread_id = event.get("thread_id", "thread-smoketest")
     message_id = event.get("message_id", f"msg-{int(time.time())}")
     tz_default = event.get("timezone_default", DEFAULT_TZ)
 
-    print("CONFIG:", {"BEDROCK_REGION": BEDROCK_REGION, "MODEL_ID": MODEL_ID, "CASES_TABLE": CASES_TABLE or ""})
-    print("INPUT:", {"thread_id": thread_id, "message_id": message_id, "preview": body_text[:120]})
-
     try:
         raw, parsed = call_nova_parser(body_text, tz_default)
-        print("NOVA_RAW_OUTPUT:", raw)
-        print("PARSED_JSON:", json.dumps(parsed, indent=2))
 
+        # Optional persistence (only if you set CASES_TABLE)
         if CASES_TABLE:
             table = dynamodb_resource().Table(CASES_TABLE)
             ddb_upsert_case(table, thread_id, message_id, parsed)
 
-        return {"ok": True, "thread_id": thread_id, "message_id": message_id, "parsed": parsed}
-
+        return {
+            "ok": True,
+            "thread_id": thread_id,
+            "message_id": message_id,
+            "parsed": parsed,
+            "raw": raw,
+        }
     except Exception as e:
-        print("ERROR:", repr(e))
         fallback = validate_result({}, tz_default)
-        return {"ok": False, "error": str(e), "thread_id": thread_id, "message_id": message_id, "parsed": fallback}
+        return {
+            "ok": False,
+            "error": str(e),
+            "thread_id": thread_id,
+            "message_id": message_id,
+            "parsed": fallback,
+        }
+
+
+# -----------------------------
+# Lambda handler (still usable for standalone smoke tests)
+# -----------------------------
+def lambda_handler(event, context):
+    return parse_email(event)
