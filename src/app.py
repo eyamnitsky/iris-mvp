@@ -11,7 +11,7 @@ from typing import Optional
 from botocore.exceptions import ClientError
 
 # --- NEW: AI parser import (module, not a Lambda) ---
-from src.iris_ai_parser import parse_email
+from iris_ai_parser import parse_email
 
 
 # -----------------------------
@@ -41,29 +41,41 @@ DDB_SK_VALUE = os.environ.get("DDB_SK_VALUE", "STATE")
 
 
 # -----------------------------
-# DynamoDB table + schema discovery (cold start)
+# DynamoDB table + schema discovery
 # -----------------------------
 table = ddb.Table(TABLE_NAME)
 
-try:
-    _desc = ddb_client.describe_table(TableName=TABLE_NAME)["Table"]
-    _key_schema = _desc.get("KeySchema", [])
-    _attr_defs = _desc.get("AttributeDefinitions", [])
+# Cache schema across warm invocations
+PK_ATTR = None
+SK_ATTR = None
+SK_TYPE = None  # 'S' | 'N' | 'B' or None
+
+def _ensure_ddb_schema_loaded():
+    """
+    Always safe to call. On first call per warm container, it loads and prints the
+    table key schema so we can debug key-mismatch issues deterministically.
+    """
+    global PK_ATTR, SK_ATTR, SK_TYPE
+    if PK_ATTR is not None:
+        return
+
+    desc = ddb_client.describe_table(TableName=TABLE_NAME)["Table"]
+    key_schema = desc.get("KeySchema", [])
+    attr_defs = desc.get("AttributeDefinitions", [])
 
     print("[ddb] region=", AWS_REGION)
     print("[ddb] table=", TABLE_NAME)
-    print("[ddb] KeySchema=", _key_schema)
-    print("[ddb] AttrDefs=", _attr_defs)
+    print("[ddb] KeySchema=", key_schema)
+    print("[ddb] AttrDefs=", attr_defs)
 
-    PK_ATTR = next((k["AttributeName"] for k in _key_schema if k["KeyType"] == "HASH"), None)
-    SK_ATTR = next((k["AttributeName"] for k in _key_schema if k["KeyType"] == "RANGE"), None)
+    PK_ATTR = next((k["AttributeName"] for k in key_schema if k["KeyType"] == "HASH"), None)
+    SK_ATTR = next((k["AttributeName"] for k in key_schema if k["KeyType"] == "RANGE"), None)
+
+    if SK_ATTR:
+        SK_TYPE = next((a.get("AttributeType") for a in attr_defs if a.get("AttributeName") == SK_ATTR), None)
 
     if not PK_ATTR:
         raise RuntimeError(f"Could not determine PK attribute for table {TABLE_NAME}")
-except Exception as e:
-    # Fail hard here because idempotency relies on DDB
-    print("[ddb] describe_table failed:", repr(e))
-    raise
 
 
 def _ddb_key_for_message(message_id: str) -> dict:
@@ -71,6 +83,7 @@ def _ddb_key_for_message(message_id: str) -> dict:
     Build the correct DynamoDB primary key for this table at runtime.
     Supports PK-only or PK+SK tables.
     """
+    _ensure_ddb_schema_loaded()
     key = {PK_ATTR: f"msg#{message_id}"}
     if SK_ATTR:
         key[SK_ATTR] = DDB_SK_VALUE
@@ -221,8 +234,16 @@ def lambda_handler(event, context):
         message_id = mail.get("messageId") or str(uuid.uuid4())
         print(f"[ses] messageId={message_id}")
 
+        # --- NEW: log DDB key details before GetItem ---
+        _ensure_ddb_schema_loaded()
+        ddb_key = _ddb_key_for_message(message_id)
+        print("[ddb] PK_ATTR=", PK_ATTR, "SK_ATTR=", SK_ATTR, "SK_TYPE=", SK_TYPE)
+        print("[ddb] GetItem Key=", ddb_key)
+        if SK_ATTR and SK_TYPE and SK_TYPE != "S":
+            print("[ddb] WARNING: sort key type is not String. Current DDB_SK_VALUE is a string:", DDB_SK_VALUE)
+
         # --- DDB idempotency check (FIXED to match table schema) ---
-        existing = table.get_item(Key=_ddb_key_for_message(message_id)).get("Item")
+        existing = table.get_item(Key=ddb_key).get("Item")
         if existing and existing.get("invite_sent_at"):
             print(f"[ddb] idempotent skip message_id={message_id}")
             return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": True})}
