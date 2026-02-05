@@ -14,7 +14,7 @@ from .templates import (
     no_overlap_email,
 )
 
-from .constraints_parser import parse_constraints
+from .constraint_parser import parse_constraints
 
 @dataclass(frozen=True)
 class OutboundMessage:
@@ -122,14 +122,10 @@ class IrisCoordinator:
         if thread.any_needs_clarification():
             thread.status = ThreadStatus.NEEDS_CLARIFICATION
             return None, []
-
-        if thread.duration_minutes is None and thread.duration_clarification_sent_at is None:
-            thread.duration_clarification_sent_at = datetime.utcnow()
-            return None, [
-                duration_clarification_email(thread.organizer_email)
-            ]
         
-        slot = find_earliest_overlap(thread)
+        duration = thread.duration_minutes or thread.meeting_duration_minutes  # defaults to 30
+        
+        slot = find_earliest_overlap(thread, duration_minutes=duration)
         if slot is None:
             thread.status = ThreadStatus.WAITING
             # Ask for more availability from everyone
