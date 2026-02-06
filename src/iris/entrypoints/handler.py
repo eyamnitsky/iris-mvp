@@ -417,13 +417,12 @@ def handle_ses_event(event: dict) -> dict:
     # ---- Clarification path: email question only, no ICS ----
     if decision.action == "clarify":
         default_prompt = (
-            "Sure — what time should I schedule this?\n\n"
             "You can reply in either of these ways:\n\n"
             "A) Specific time slot (preferred)\n"
-            "MM/DD: start–end (timezone)\n"
+            "Day, MM/DD: start–end (timezone)\n"
             "Examples:\n"
-            "02/11: 1pm–2pm ET\n"
-            "02/12: 09:30–10:00 PT\n\n"
+            "Tue, 02/11: 1pm–2pm ET\n"
+            "Wed, 02/12: 09:30–10:00 PT\n\n"
             "B) Flexible constraints (also OK)\n"
             "- “Any afternoon Mon–Tue next week”\n"
             "- “Any time after 3pm on Wednesday”\n"
