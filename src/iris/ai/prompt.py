@@ -21,6 +21,7 @@ Rules:
 - If no time is provided, candidates must be [].
 - Confidence must be between 0.0 and 1.0.
 - In candidates, use weekday names (Monday–Sunday). Convert "today"/"tomorrow" to the correct weekday based on Today.
+- If a time range is written like "4–5pm" or "4-5pm", interpret it as "4pm–5pm" (copy AM/PM to the start).
 
 --------------------
 EXAMPLES (follow exactly)
