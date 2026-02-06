@@ -276,6 +276,7 @@ def handle_ses_event(event: dict) -> dict:
                 if data.get("scheduled_end"):
                     t.scheduled_end = datetime.fromisoformat(data["scheduled_end"])
                 t.scheduling_rationale = data.get("scheduling_rationale")
+                t.pending_candidate = data.get("pending_candidate")
                 return t
 
             def put(self, thread):
@@ -305,6 +306,7 @@ def handle_ses_event(event: dict) -> dict:
                     "scheduled_start": thread.scheduled_start.isoformat() if thread.scheduled_start else None,
                     "scheduled_end": thread.scheduled_end.isoformat() if thread.scheduled_end else None,
                     "scheduling_rationale": thread.scheduling_rationale,
+                    "pending_candidate": thread.pending_candidate,
                 }
                 _coord_put(thread.thread_id, json.dumps(to_json_safe(data)))
 

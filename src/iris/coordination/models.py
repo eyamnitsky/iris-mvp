@@ -52,6 +52,7 @@ class MeetingThread:
     scheduled_start: Optional[datetime] = None
     scheduled_end: Optional[datetime] = None
     scheduling_rationale: Optional[str] = None
+    pending_candidate: Optional[dict] = None
 
     def pending_participants(self) -> List[Participant]:
         return [p for p in self.participants.values() if not p.has_responded]

@@ -17,6 +17,91 @@ from ..scheduling.scheduling import candidate_to_datetimes
 
 _DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
+_WEEKDAY_RE = re.compile(
+    r"\b(mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b",
+    re.IGNORECASE,
+)
+_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", re.IGNORECASE)
+
+_WEEKDAY_CANON = {
+    "mon": "Monday",
+    "tue": "Tuesday",
+    "wed": "Wednesday",
+    "thu": "Thursday",
+    "fri": "Friday",
+    "sat": "Saturday",
+    "sun": "Sunday",
+}
+
+
+def _candidate_has_weekday(candidate: Dict[str, Any]) -> bool:
+    start_local = (candidate.get("start_local") or "").strip()
+    return bool(_WEEKDAY_RE.search(start_local))
+
+
+def _weekday_from_candidate(candidate: Dict[str, Any]) -> Optional[str]:
+    start_local = (candidate.get("start_local") or "").strip()
+    m = _WEEKDAY_RE.search(start_local)
+    if not m:
+        return None
+    token = m.group(1).lower()
+    if token.startswith("tue"):
+        key = "tue"
+    elif token.startswith("thu"):
+        key = "thu"
+    else:
+        key = token[:3]
+    return _WEEKDAY_CANON.get(key)
+
+
+def _extract_time_minutes(text: str) -> Optional[int]:
+    m = _TIME_RE.search(text or "")
+    if not m:
+        return None
+    hour = int(m.group(1))
+    minute = int(m.group(2) or "0")
+    ampm = m.group(3).lower()
+    if ampm == "am":
+        if hour == 12:
+            hour = 0
+    elif ampm == "pm":
+        if hour != 12:
+            hour += 12
+    return hour * 60 + minute
+
+
+def _format_time_12h(minutes: int) -> str:
+    h = minutes // 60
+    m = minutes % 60
+    ampm = "AM"
+    if h == 0:
+        h = 12
+        ampm = "AM"
+    elif h == 12:
+        ampm = "PM"
+    elif h > 12:
+        h -= 12
+        ampm = "PM"
+    return f"{h}:{m:02d} {ampm}"
+
+
+def _candidate_from_time_only(
+    time_minutes: int,
+    weekday: str,
+    duration_minutes: int,
+    source_text: str,
+) -> Dict[str, Any]:
+    start_minutes = time_minutes
+    end_minutes = (time_minutes + duration_minutes) % (24 * 60)
+    start_local = f"{weekday} {_format_time_12h(start_minutes)}"
+    end_local = f"{weekday} {_format_time_12h(end_minutes)}"
+    return {
+        "start_local": start_local,
+        "end_local": end_local,
+        "confidence": 0.9,
+        "source_text": source_text[:200],
+    }
+
 def _parse_explicit_day_time(text: str, tz_name: str) -> Optional[datetime]:
     if not text:
         return None
@@ -134,6 +219,7 @@ class IrisCoordinationHandler:
 
             if ai_intent == "NEW_REQUEST":
                 if ai_needs and ai_cands:
+                    thread.pending_candidate = ai_cands[0] if isinstance(ai_cands[0], dict) else None
                     clar_q = ai_clar_q or "Could you clarify the exact time (including AM/PM and timezone)?"
                     thread.status = ThreadStatus.NEEDS_CLARIFICATION
                     self.store.put(thread)
@@ -159,6 +245,7 @@ class IrisCoordinationHandler:
                         thread.scheduled_end = end_dt
                         thread.scheduling_rationale = "Explicit time requested by organizer."
                         thread.status = ThreadStatus.SCHEDULED
+                        thread.pending_candidate = None
                         self.store.put(thread)
                         return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)
 
@@ -197,6 +284,7 @@ class IrisCoordinationHandler:
 
             if ai_intent in ("NEW_REQUEST", "CONFIRMATION"):
                 if ai_needs and ai_cands:
+                    thread.pending_candidate = ai_cands[0] if isinstance(ai_cands[0], dict) else thread.pending_candidate
                     clar_q = ai_clar_q or "Could you clarify the exact time (including AM/PM and timezone)?"
                     self.store.put(thread)
                     return [
@@ -209,17 +297,63 @@ class IrisCoordinationHandler:
 
                 if not ai_needs and ai_cands:
                     tz = ZoneInfo(thread.timezone)
+                    start_dt = None
+                    end_dt = None
                     try:
                         start_dt, end_dt = candidate_to_datetimes(ai_cands[0], tz)
                     except Exception:
                         start_dt = None
                         end_dt = None
 
+                    if (not start_dt or not end_dt) and thread.pending_candidate:
+                        pending_weekday = _weekday_from_candidate(thread.pending_candidate)
+                        time_minutes = _extract_time_minutes(inbound.body_text)
+                        if pending_weekday and time_minutes is not None:
+                            duration = thread.duration_minutes or thread.meeting_duration_minutes
+                            derived = _candidate_from_time_only(
+                                time_minutes=time_minutes,
+                                weekday=pending_weekday,
+                                duration_minutes=duration,
+                                source_text=inbound.body_text,
+                            )
+                            try:
+                                start_dt, end_dt = candidate_to_datetimes(derived, tz)
+                            except Exception:
+                                start_dt = None
+                                end_dt = None
+
                     if start_dt and end_dt:
                         thread.scheduled_start = start_dt
                         thread.scheduled_end = end_dt
                         thread.scheduling_rationale = "Explicit time requested by organizer."
                         thread.status = ThreadStatus.SCHEDULED
+                        thread.pending_candidate = None
+                        self.store.put(thread)
+                        return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)
+
+            if thread.pending_candidate:
+                pending_weekday = _weekday_from_candidate(thread.pending_candidate)
+                time_minutes = _extract_time_minutes(inbound.body_text)
+                if pending_weekday and time_minutes is not None:
+                    duration = thread.duration_minutes or thread.meeting_duration_minutes
+                    derived = _candidate_from_time_only(
+                        time_minutes=time_minutes,
+                        weekday=pending_weekday,
+                        duration_minutes=duration,
+                        source_text=inbound.body_text,
+                    )
+                    tz = ZoneInfo(thread.timezone)
+                    try:
+                        start_dt, end_dt = candidate_to_datetimes(derived, tz)
+                    except Exception:
+                        start_dt = None
+                        end_dt = None
+                    if start_dt and end_dt:
+                        thread.scheduled_start = start_dt
+                        thread.scheduled_end = end_dt
+                        thread.scheduling_rationale = "Explicit time requested by organizer."
+                        thread.status = ThreadStatus.SCHEDULED
+                        thread.pending_candidate = None
                         self.store.put(thread)
                         return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)
 

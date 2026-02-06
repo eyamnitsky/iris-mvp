@@ -83,6 +83,7 @@ class DdbThreadStore:
         thread.scheduled_start = datetime.fromisoformat(data["scheduled_start"]) if data.get("scheduled_start") else None
         thread.scheduled_end = datetime.fromisoformat(data["scheduled_end"]) if data.get("scheduled_end") else None
         thread.scheduling_rationale = data.get("scheduling_rationale")
+        thread.pending_candidate = data.get("pending_candidate")
 
         return thread
 
@@ -112,6 +113,7 @@ class DdbThreadStore:
             "scheduled_start": thread.scheduled_start.isoformat() if thread.scheduled_start else None,
             "scheduled_end": thread.scheduled_end.isoformat() if thread.scheduled_end else None,
             "scheduling_rationale": thread.scheduling_rationale,
+            "pending_candidate": thread.pending_candidate,
         }
 
         self._table.put_item(
