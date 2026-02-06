@@ -122,6 +122,16 @@ class IrisCoordinator:
         if thread.any_needs_clarification():
             thread.status = ThreadStatus.NEEDS_CLARIFICATION
             return None, []
+
+        if any(not p.parsed_windows for p in thread.participants.values()):
+            thread.status = ThreadStatus.WAITING
+            return None, [
+                OutboundMessage(
+                    to=list(thread.participants.keys()),
+                    subject=f"{thread.subject} — need more availability",
+                    body=no_overlap_email(),
+                )
+            ]
         
         duration = thread.duration_minutes or thread.meeting_duration_minutes  # defaults to 30
         

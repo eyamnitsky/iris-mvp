@@ -10,6 +10,9 @@ from ..infra.config import DDB_SK_VALUE
 from ..infra.serialization import ddb_clean, ddb_sanitize, to_json_safe
 
 from .context import IrisContext, ConversationState, Intent
+from ..coordination.availability_parser import parse_availability
+from ..coordination.constraint_parser import parse_constraints
+from ..coordination.models import TimeWindow
 from .parsing import infer_intent
 from .rules import missing_fields, is_ready
 from .formatting import ask_for_missing, confirm_summary
@@ -75,6 +78,33 @@ def _ai_to_thread_intent(ai_intent: Optional[str]) -> str:
     if up in {"NEW_REQUEST", "AVAILABILITY", "CONFIRMATION", "DECLINE", "OTHER"}:
         return up
     return "OTHER"
+
+
+def _format_time_12h(minutes: int) -> str:
+    h = minutes // 60
+    m = minutes % 60
+    ampm = "AM"
+    if h == 0:
+        h = 12
+        ampm = "AM"
+    elif h == 12:
+        ampm = "PM"
+    elif h > 12:
+        h -= 12
+        ampm = "PM"
+    return f"{h}:{m:02d} {ampm}"
+
+
+def _window_to_candidate(w: TimeWindow, source_text: str) -> Dict[str, Any]:
+    day_name = w.day.strftime("%A")
+    start_local = f"{day_name} {_format_time_12h(w.start_minute)}"
+    end_local = f"{day_name} {_format_time_12h(w.end_minute)}"
+    return {
+        "start_local": start_local,
+        "end_local": end_local,
+        "confidence": 1.0,
+        "source_text": source_text[:200],
+    }
 
 
 def process_incoming_email(
@@ -145,8 +175,24 @@ def process_incoming_email(
         )
         state = ConversationState.EXECUTION.value
     else:
-        decision = Decision(action="clarify", reply_text=clar_q)
-        state = ConversationState.CLARIFICATION_LOOP.value
+        # Fallback: if body text clearly specifies a day/time, schedule without asking again.
+        parsed = parse_availability(body_text, tz_name=tz)
+        windows = parsed.windows
+        if not windows:
+            windows, _ = parse_constraints(body_text, tz=tz)
+
+        if windows:
+            windows.sort(key=lambda w: (w.day, w.start_minute))
+            last_candidate = _window_to_candidate(windows[0], body_text)
+            decision = Decision(
+                action="schedule",
+                time_kind="candidate",
+                chosen_candidate=last_candidate,
+            )
+            state = ConversationState.EXECUTION.value
+        else:
+            decision = Decision(action="clarify", reply_text=clar_q)
+            state = ConversationState.CLARIFICATION_LOOP.value
 
     # Persist thread state
     thread_item = dict(key)
