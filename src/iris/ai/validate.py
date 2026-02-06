@@ -62,9 +62,10 @@ def validate_result(obj: Any, tz_default: str) -> Dict[str, Any]:
     day_re = re.compile(r"\b(Mon|Tues|Tue|Wed|Thu|Thurs|Fri|Sat|Sun)(day)?\b", re.IGNORECASE)
     hour_re = re.compile(r"\b([1-9]|1[0-2])(?:\:\d{2})?\b")
     ampm_re = re.compile(r"\b(am|pm)\b", re.IGNORECASE)
-    aroundish_re = re.compile(r"\b(around|about|approx|~|ish)\b", re.IGNORECASE)
+    part_of_day_re = re.compile(r"\b(morning|afternoon|evening|noon|midday)\b", re.IGNORECASE)
 
     has_day_and_time = False
+    ambiguous_time = False
     for c in obj["candidates"]:
         start_local = c.get("start_local", "")
         src = c.get("source_text", "")
@@ -75,13 +76,16 @@ def validate_result(obj: Any, tz_default: str) -> Dict[str, Any]:
 
         if ampm_re.search(text) and hour_re.search(text):
             has_day_and_time = True
-            break
+            continue
 
-        if aroundish_re.search(text) and hour_re.search(text):
-            has_day_and_time = True
-            break
+        if hour_re.search(text) and not ampm_re.search(text):
+            ambiguous_time = True
+            continue
 
-    if has_day_and_time:
+        if part_of_day_re.search(text):
+            ambiguous_time = True
+
+    if has_day_and_time and not ambiguous_time:
         obj["needs_clarification"] = False
         obj["clarifying_question"] = ""
     else:
@@ -91,5 +95,10 @@ def validate_result(obj: Any, tz_default: str) -> Dict[str, Any]:
         if not obj["candidates"] and obj["needs_clarification"] is False:
             obj["needs_clarification"] = True
             obj["clarifying_question"] = safe["clarifying_question"]
+
+    if ambiguous_time:
+        obj["needs_clarification"] = True
+        if not obj.get("clarifying_question"):
+            obj["clarifying_question"] = "Could you clarify the exact time (including AM/PM and timezone)?"
 
     return obj

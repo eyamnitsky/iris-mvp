@@ -85,6 +85,7 @@ def handle_coordination(
         subject=subject,
         body_text=body_text,
         is_new_request=is_new_request,
+        ai_parsed=ai_parsed,
     )
 
     outbound, plan = handler.handle(inbound)

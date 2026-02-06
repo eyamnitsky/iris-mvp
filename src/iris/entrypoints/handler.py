@@ -331,6 +331,7 @@ def handle_ses_event(event: dict) -> dict:
             subject=subject,
             body_text=body_text,
             is_new_request=is_new,
+            ai_parsed=ai_parsed,
         )
 
         outbound_msgs, schedule_plan = handler.handle(inbound)
