@@ -7,11 +7,15 @@ from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from .models import TimeWindow
+from .normalization import DAY_ALIASES, normalize_dash, split_time_range
 
 DOW = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-DOW_RE = r"(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)"
+DOW_RE = r"(mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)"
 RANGE_DOW_RE = re.compile(rf"\b{DOW_RE}\s*-\s*{DOW_RE}\b", re.IGNORECASE)
 LIST_DOW_RE = re.compile(rf"\b{DOW_RE}(?:\s*/\s*{DOW_RE})+\b", re.IGNORECASE)
+
+LINE_DAY_RE = re.compile(r"^\s*(?P<day>[A-Za-z]{3,9})\b\s*[:,-]?\s*(?P<times>.+?)\s*$")
+TIME_TOKEN_RE = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$", re.IGNORECASE)
 
 def _now_date(tz: str) -> date:
     return datetime.now(tz=ZoneInfo(tz)).date()
@@ -127,15 +131,116 @@ def _extract_days(text: str, tz: str) -> Optional[List[date]]:
         days = [base + timedelta(days=i) for i in range(7) if (base + timedelta(days=i)).weekday() in wanted]
         return days
 
-    # Single day mention
-    for k, idx in DOW.items():
-        if re.search(rf"\b{k}\b", t):
-            # choose that day in base week
+    # Single/multiple day mentions (collect all)
+    found: List[date] = []
+    for alias, canon in DAY_ALIASES.items():
+        if re.search(rf"\b{alias}\b", t, re.IGNORECASE):
+            idx = DOW.get(canon)
+            if idx is None:
+                continue
             for i in range(7):
                 d = base + timedelta(days=i)
-                if d.weekday() == idx:
-                    return [d]
+                if d.weekday() == idx and d not in found:
+                    found.append(d)
+                    break
+    return found or None
+
+
+def _parse_time_token(token: str) -> Optional[tuple[int, int, str]]:
+    m = TIME_TOKEN_RE.match(token)
+    if not m:
+        return None
+    h = int(m.group(1))
+    minute = int(m.group(2) or "0")
+    ampm = (m.group(3) or "").lower()
+    return h, minute, ampm
+
+
+def _coerce_ampm(start: tuple[int, int, str], end: tuple[int, int, str]) -> Optional[tuple[tuple[int, int, str], tuple[int, int, str]]]:
+    s_h, s_m, s_amp = start
+    e_h, e_m, e_amp = end
+
+    if s_amp == "" and e_amp in ("am", "pm"):
+        return (s_h, s_m, e_amp), end
+    if e_amp == "" and s_amp in ("am", "pm"):
+        return start, (e_h, e_m, s_amp)
+    if s_amp in ("am", "pm") and e_amp in ("am", "pm"):
+        return start, end
+
+    if s_amp == "" and e_amp == "" and (s_h >= 13 or e_h >= 13):
+        return start, end  # treat as 24h
+
     return None
+
+
+def _to_minutes(h: int, m: int, ap: str) -> int:
+    ap = ap.lower()
+    if ap == "am" and h == 12:
+        h = 0
+    if ap == "pm" and h != 12:
+        h += 12
+    return _minutes(h, m)
+
+
+def _date_for_weekday(base: date, idx: int) -> Optional[date]:
+    for i in range(7):
+        d = base + timedelta(days=i)
+        if d.weekday() == idx:
+            return d
+    return None
+
+
+def _parse_day_time_lines(text: str, tz: str) -> List[TimeWindow]:
+    windows: List[TimeWindow] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        m = LINE_DAY_RE.match(line)
+        if not m:
+            continue
+        day_token = m.group("day").strip().lower()
+        canon = DAY_ALIASES.get(day_token)
+        if not canon:
+            continue
+
+        base = _now_date(tz)
+        if "next week" in line.lower():
+            base = _start_of_next_week(base)
+
+        idx = DOW.get(canon)
+        if idx is None:
+            continue
+        d = _date_for_weekday(base, idx)
+        if not d:
+            continue
+
+        times = normalize_dash(m.group("times"))
+        for part in times.split(","):
+            tr = split_time_range(part)
+            if not tr:
+                continue
+            s_tok, e_tok = tr
+            ps = _parse_time_token(s_tok)
+            pe = _parse_time_token(e_tok)
+            if not ps or not pe:
+                continue
+            coerced = _coerce_ampm(ps, pe)
+            if coerced is None:
+                continue
+            (s_h, s_m, s_amp), (e_h, e_m, e_amp) = coerced
+
+            if s_amp == "" and e_amp == "" and (s_h >= 13 or e_h >= 13):
+                start_min = s_h * 60 + s_m
+                end_min = e_h * 60 + e_m
+            else:
+                start_min = _to_minutes(s_h, s_m, s_amp)
+                end_min = _to_minutes(e_h, e_m, e_amp)
+
+            tw = TimeWindow(day=d, start_minute=start_min, end_minute=end_min)
+            if tw.is_valid():
+                windows.append(tw)
+    return windows
 
 def parse_constraints(text: str, tz: str) -> Tuple[List[TimeWindow], Optional[str]]:
     """
@@ -145,6 +250,10 @@ def parse_constraints(text: str, tz: str) -> Tuple[List[TimeWindow], Optional[st
     t = (text or "").strip()
     if not t:
         return [], None
+
+    line_windows = _parse_day_time_lines(t, tz)
+    if line_windows:
+        return line_windows, None
 
     days = _extract_days(t, tz)
     if not days:
