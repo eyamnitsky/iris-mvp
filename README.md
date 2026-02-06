@@ -4,7 +4,7 @@ Overview
 
 Iris is an AI-powered, transactional email scheduling assistant that coordinates meetings directly from email threads.
 
-Iris behaves like a human executive assistant:
+Iris is designed to behave like a human executive assistant:
 	•	She participates only when explicitly included on an email thread
 	•	She coordinates one-to-one and multi-participant meetings
 	•	She sends transactional replies and calendar invitations only in response to inbound emails
@@ -53,7 +53,7 @@ Key rules:
 
 AI-Driven Understanding
 
-Iris uses an LLM to interpret natural language such as:
+Iris uses a large language model (LLM) to interpret natural language such as:
 	•	“Any afternoon Mon–Tue next week”
 	•	“After 3, but not during pickup”
 	•	“Friday works, Saturday maybe”
@@ -91,12 +91,13 @@ Architecture
 High-Level System Flow
 
 flowchart LR
-    A[Inbound Email] --> B[Amazon SES (Inbound)]
-    B --> C[Amazon S3<br/>Raw Email Storage]
-    C --> D[AWS Lambda<br/>Iris Handler]
+    A[Inbound Email]
+    A --> B[Amazon SES (Inbound)]
+    B --> C[Amazon S3\nRaw Email Storage]
+    C --> D[AWS Lambda\nIris Handler]
 
-    D --> E[LLM<br/>Parsing & Reasoning]
-    D --> F[DynamoDB<br/>Threads & State]
+    D --> E[LLM\nParsing & Reasoning]
+    D --> F[DynamoDB\nThreads & State]
     F --> D
 
     D --> G[Amazon SES (Outbound)]
@@ -118,7 +119,7 @@ AWS Lambda (Python)
 	•	AI integration
 
 DynamoDB
-	•	Thread state
+	•	Thread state storage
 	•	Participant tracking
 	•	Coordination lifecycle
 
@@ -172,7 +173,8 @@ License
 
 This project is licensed under the Polyform Noncommercial License.
 
-You may explore, modify, and use the code for non-commercial purposes. Commercial use requires explicit permission from the author.
+You are free to explore, modify, and use the code for non-commercial purposes.
+Commercial use requires explicit permission from the author.
 
 ⸻
 
