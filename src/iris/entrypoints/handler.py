@@ -16,6 +16,7 @@ from ..email.email_utils import flatten_emails, dedupe, safe_json, extract_plain
 from ..infra.s3_loader import load_email_bytes_from_s3
 from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
 from ..email.mime_builder import build_ics, build_raw_mime_text_reply, build_raw_mime_reply_with_ics
+from ..infra.google_calendar import create_meet_event
 from ..conversation.engine import process_incoming_email
 from ..conversation.guardrails import apply_input_guardrail
 
@@ -88,6 +89,19 @@ def _coord_put(thread_id: str, coordination_json: str) -> None:
 # -------------------------
 # Main handler
 # -------------------------
+
+def _append_line(existing: str | None, line: str) -> str:
+    if existing and existing.strip():
+        return existing.rstrip() + "\n" + line
+    return line
+
+
+def _timezone_name_from_dt(dt: datetime) -> str:
+    tzinfo = dt.tzinfo
+    if hasattr(tzinfo, "key") and tzinfo.key:
+        return tzinfo.key
+    return TIMEZONE
+
 
 def handle_ses_event(event: dict) -> dict:
     print("DEPLOY_MARKER_ENTRYPOINT_REWRITE_002")
@@ -357,6 +371,29 @@ def handle_ses_event(event: dict) -> dict:
             event_uid = f"{uuid.uuid4()}@{IRIS_EMAIL.split('@', 1)[1]}"
             attendees = participants_all[:]  # already excludes Iris
 
+            meet_url = None
+            try:
+                print("[meet] create start", schedule_plan.start, schedule_plan.end, attendees)
+                meet = create_meet_event(
+                    summary=subject,
+                    start_rfc3339=schedule_plan.start.isoformat(),
+                    end_rfc3339=schedule_plan.end.isoformat(),
+                    attendees=attendees,
+                    timezone=_timezone_name_from_dt(schedule_plan.start),
+                )
+                meet_url = meet.get("meet_url")
+                print("[meet] create success", meet_url)
+            except Exception as e:
+                print("[meet] create failed", repr(e))
+
+            description = None
+            location = None
+            url = None
+            if meet_url:
+                description = _append_line(description, f"Google Meet: {meet_url}")
+                location = _append_line(location, meet_url)
+                url = _append_line(url, meet_url)
+
             ics = build_ics(
                 subject=subject,
                 start=schedule_plan.start,
@@ -364,10 +401,16 @@ def handle_ses_event(event: dict) -> dict:
                 organizer=IRIS_EMAIL,
                 attendees=attendees,
                 uid=event_uid,
+                description=description,
+                location=location,
+                url=url,
             )
 
             pretty_when = schedule_plan.start.strftime("%A %I:%M %p").lstrip("0")
-            text_body_reply = f"I scheduled a meeting for {pretty_when}.\n"
+            if meet_url:
+                text_body_reply = f"Google Meet: {meet_url}\n\nI scheduled a meeting for {pretty_when}.\n"
+            else:
+                text_body_reply = f"I scheduled a meeting for {pretty_when}.\n"
 
             raw_mime = build_raw_mime_reply_with_ics(
                 subject=f"Re: {subject}",
@@ -480,20 +523,51 @@ def handle_ses_event(event: dict) -> dict:
             print("[decision] candidate parse failed; falling back:", repr(e))
 
     event_uid = f"{uuid.uuid4()}@{IRIS_EMAIL.split('@', 1)[1]}"
+    attendees = dedupe([from_email] + to_emails)
+
+    meet_url = None
+    try:
+        print("[meet] create start", start, end, attendees)
+        meet = create_meet_event(
+            summary=subject,
+            start_rfc3339=start.isoformat(),
+            end_rfc3339=end.isoformat(),
+            attendees=attendees,
+            timezone=_timezone_name_from_dt(start),
+        )
+        meet_url = meet.get("meet_url")
+        print("[meet] create success", meet_url)
+    except Exception as e:
+        print("[meet] create failed", repr(e))
+
+    description = None
+    location = None
+    url = None
+    if meet_url:
+        description = _append_line(description, f"Google Meet: {meet_url}")
+        location = _append_line(location, meet_url)
+        url = _append_line(url, meet_url)
+
     ics = build_ics(
         subject=subject,
         start=start,
         end=end,
         organizer=IRIS_EMAIL,
-        attendees=dedupe([from_email] + to_emails),
+        attendees=attendees,
         uid=event_uid,
+        description=description,
+        location=location,
+        url=url,
     )
 
     try:
         pretty_when = start.strftime("%A %I:%M %p").lstrip("0")
     except Exception:
         pretty_when = "the requested time"
-    text_body_reply = f"I scheduled a meeting for {pretty_when}.\n"
+    if meet_url:
+        text_body_reply = f"Google Meet: {meet_url}\n\nI scheduled a meeting for {pretty_when}.\n"
+    else:
+        text_body_reply = f"I scheduled a meeting for {pretty_when}.\n"
 
     raw_mime = build_raw_mime_reply_with_ics(
         subject=f"Re: {subject}",

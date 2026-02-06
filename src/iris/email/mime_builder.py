@@ -11,7 +11,17 @@ from ..infra.config import TIMEZONE
 
 DISPLAY_NAME = "Iris (Liazon)"
 
-def build_ics(subject: str, start: datetime, end: datetime, organizer: str, attendees: List[str], uid: str) -> str:
+def build_ics(
+    subject: str,
+    start: datetime,
+    end: datetime,
+    organizer: str,
+    attendees: List[str],
+    uid: str,
+    description: Optional[str] = None,
+    location: Optional[str] = None,
+    url: Optional[str] = None,
+) -> str:
     dtstamp = datetime.now(tz=ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%SZ")
 
     def fmt(dt: datetime) -> str:
@@ -34,6 +44,13 @@ def build_ics(subject: str, start: datetime, end: datetime, organizer: str, atte
 
     for a in attendees:
         lines.append(f"ATTENDEE;CN={a};RSVP=TRUE:mailto:{a}")
+
+    if description:
+        lines.append(f"DESCRIPTION:{description}")
+    if location:
+        lines.append(f"LOCATION:{location}")
+    if url:
+        lines.append(f"URL:{url}")
 
     lines += ["END:VEVENT", "END:VCALENDAR", ""]
     return "\r\n".join(lines)
