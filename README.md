@@ -84,13 +84,12 @@ AI_REASONING_MODE=true
 
 ```mermaid
 flowchart LR
-    A[Inbound Email]
-    A --> B[Amazon SES (Inbound)]
-    B --> C[Amazon S3\nRaw Email Storage]
-    C --> D[AWS Lambda\nIris Handler]
+    A[Inbound Email] --> B[Amazon SES (Inbound)]
+    B --> C[Amazon S3<br/>Raw Email Storage]
+    C --> D[AWS Lambda<br/>Iris Handler]
 
-    D --> E[LLM\nParsing & Reasoning]
-    D --> F[DynamoDB\nThreads & State]
+    D --> E[LLM<br/>Parsing & Reasoning]
+    D --> F[DynamoDB<br/>Threads & State]
     F --> D
 
     D --> G[Amazon SES (Outbound)]
