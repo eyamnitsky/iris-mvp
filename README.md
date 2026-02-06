@@ -4,47 +4,47 @@ Overview
 
 Iris is an AI-powered, transactional email scheduling assistant that coordinates meetings directly from email threads.
 
-Iris is designed to behave like a human executive assistant:
-	•	She participates only in conversations where she is explicitly included
+Iris behaves like a human executive assistant:
+	•	She participates only when explicitly included on an email thread
 	•	She coordinates one-to-one and multi-participant meetings
 	•	She sends transactional replies and calendar invitations only in response to inbound emails
 
-This repository currently represents an advanced proof-of-concept focused on correctness, safety, and realistic email behavior rather than end-user polish.
+This repository represents an advanced proof-of-concept focused on correctness, safety, and realistic email behavior rather than end-user polish.
 
 ⸻
 
 Core Capabilities
 
-1. Inbound Email Processing
-	•	Receives emails sent to a managed domain (e.g. iris@liazon.cc)
-	•	Processes raw RFC-822 email content
+Inbound Email Processing
+	•	Receives emails via Amazon SES (Inbound)
+	•	Stores raw RFC-822 messages in Amazon S3
 	•	Extracts sender, recipients, subject, body, and threading headers
 
-2. Thread-Aware Conversation Handling
-	•	Canonical thread identification across all participants
+Thread-Aware Conversation Handling
+	•	Canonical thread resolution across all participants
 	•	Robust handling of:
-	•	Gmail Message-Id
+	•	Message-Id
 	•	In-Reply-To
 	•	References
 	•	SES-generated message IDs
 	•	Replies from different participants are correctly resolved into the same logical thread
 
-3. Single-Participant Scheduling
-	•	Handles direct scheduling requests (“Schedule something tomorrow”)
-	•	Parses time expressions using AI
+Single-Participant Scheduling
+	•	Handles direct scheduling requests (e.g. “Schedule something tomorrow”)
+	•	Uses AI to interpret natural language
 	•	Defaults to 30-minute meetings unless otherwise specified
 
-4. Multi-Participant Coordination (Key Feature)
+Multi-Participant Coordination
 
 When Iris is included on an email with multiple participants, she:
 	1.	Detects a coordination request
 	2.	Identifies all required participants from the original message
-	3.	Asks each participant for availability (with suggested formats)
+	3.	Requests availability from each participant (with suggested formats)
 	4.	Waits for all participants to respond
 	5.	Reconciles availability
 	6.	Schedules the meeting and sends calendar invitations
 
-Important rules:
+Key rules:
 	•	Availability ranges (e.g. “2–4pm”) are not meeting duration
 	•	Meeting duration defaults to 30 minutes unless explicitly specified
 	•	Iris never schedules until all participants have responded
@@ -58,7 +58,7 @@ Iris uses an LLM to interpret natural language such as:
 	•	“After 3, but not during pickup”
 	•	“Friday works, Saturday maybe”
 
-The AI is responsible for interpretation and normalization, not execution.
+The LLM is responsible for interpretation and normalization, not execution.
 
 Deterministic code remains responsible for:
 	•	Conflict detection
@@ -79,7 +79,7 @@ Even in this mode:
 	•	Iris never schedules invalid or unsafe times
 	•	Deterministic fallback logic remains in place
 
-Enabled via environment variable:
+Enable via environment variable:
 
 AI_REASONING_MODE=true
 
@@ -88,42 +88,47 @@ AI_REASONING_MODE=true
 
 Architecture
 
-High-Level Flow
+High-Level System Flow
 
 flowchart LR
-  Email[Inbound Email]
-  Email --> SESin[Amazon SES Inbound]
-  SESin --> S3[Amazon S3 - Raw Email]
-  S3 --> Lambda[AWS Lambda - Iris Handler]
+    A[Inbound Email] --> B[Amazon SES (Inbound)]
+    B --> C[Amazon S3<br/>Raw Email Storage]
+    C --> D[AWS Lambda<br/>Iris Handler]
 
-  Lambda --> LLM[LLM - Parsing & Reasoning]
-  Lambda --> DDB[DynamoDB - Threads & State]
-  DDB --> Lambda
+    D --> E[LLM<br/>Parsing & Reasoning]
+    D --> F[DynamoDB<br/>Threads & State]
+    F --> D
 
-  Lambda --> SESout[Amazon SES Outbound]
-  SESout --> Recipients[Participants]
+    D --> G[Amazon SES (Outbound)]
+    G --> H[Recipients / Participants]
 
 Key Components
-	•	Amazon SES (Inbound)
+
+Amazon SES (Inbound)
 	•	Receives transactional emails
 	•	Enforces strict receipt rules
-	•	Amazon S3
+
+Amazon S3
 	•	Stores raw inbound messages
-	•	AWS Lambda (Python)
+
+AWS Lambda (Python)
 	•	Entry point for all processing
 	•	Thread resolution
 	•	Coordination logic
 	•	AI integration
-	•	DynamoDB
+
+DynamoDB
 	•	Thread state
 	•	Participant tracking
 	•	Coordination lifecycle
-	•	LLM Integration
+
+LLM Integration
 	•	Natural language understanding
 	•	Availability parsing
 	•	Optional reconciliation proposals
-	•	Amazon SES (Outbound)
-	•	Sends replies and calendar invites (SendRawEmail)
+
+Amazon SES (Outbound)
+	•	Sends replies and calendar invites using SendRawEmail
 
 ⸻
 
@@ -139,7 +144,7 @@ This service is strictly transactional:
 	•	No reuse of recipient lists
 
 Designed to comply with:
-	•	AWS SES Transactional Email policy
+	•	AWS SES Transactional Email Policy
 	•	AWS Acceptable Use Policy
 
 ⸻
@@ -157,46 +162,21 @@ This is not yet a production SaaS.
 
 Non-Goals (For Now)
 	•	No calendar API integrations (Google / Microsoft)
-	•	No user UI
+	•	No user-facing UI
 	•	No background reminders or nudges
 	•	No scheduling without explicit participant replies
 
 ⸻
 
-Intended Use
+License
 
-Iris is intended for:
-	•	Individuals or small teams
-	•	Explicit, opt-in usage
-	•	Scheduling initiated by real human emails
+This project is licensed under the Polyform Noncommercial License.
 
-Future iterations may include:
-	•	User-owned domains
-	•	Per-user customization
-	•	Richer coordination strategies
+You may explore, modify, and use the code for non-commercial purposes. Commercial use requires explicit permission from the author.
 
 ⸻
 
 Contact
 
-Repository Owner:
-Eugene Yamnitsky
+Repository Owner: Eugene Yamnitsky
 Email: eugene.yamnitsky@gmail.com
-
-⸻
-
-Acknowledgment
-
-This project complies with:
-	•	AWS Service Terms
-	•	AWS Acceptable Use Policy
-	•	AWS SES Transactional Email guidelines
-
-⸻
-
-## License
-
-This project is licensed under the **Polyform Noncommercial License**.
-
-You are free to explore, modify, and use the code for non-commercial purposes.
-Commercial use requires explicit permission from the author.
