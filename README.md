@@ -1,110 +1,202 @@
-# Iris – Transactional Email Scheduling Assistant (POC)
+Iris — AI-Powered Email Scheduling Assistant
 
-## Overview
+Overview
 
-This repository contains a **proof-of-concept transactional email service** named **Iris**.  
-Iris acts as an automated scheduling assistant that processes inbound emails and sends
-calendar invitations and replies on behalf of a user.
+Iris is an AI-powered, transactional email scheduling assistant that coordinates meetings directly from email threads.
 
-The system is designed to support **one-to-one, user-initiated scheduling workflows**
-(e.g. meeting coordination, replies, and rescheduling), **not marketing or bulk email**.
+Iris is designed to behave like a human executive assistant:
+	•	She participates only in conversations where she is explicitly included
+	•	She coordinates one-to-one and multi-participant meetings
+	•	She sends transactional replies and calendar invitations only in response to inbound emails
 
-This repository is currently used for internal testing and validation only.
+This repository currently represents an advanced proof-of-concept focused on correctness, safety, and realistic email behavior rather than end-user polish.
 
----
+⸻
 
-## What This Service Does
+Core Capabilities
 
-1. **Receives inbound emails** sent to a managed domain (e.g. `iris@<domain>`)
-2. **Parses the message content** (sender, recipients, subject, body)
-3. **Applies scheduling logic** (e.g. generate a calendar invite or reply)
-4. **Sends transactional responses**, including:
-   - Calendar invitations (`.ics`)
-   - Direct replies to the original participants
+1. Inbound Email Processing
+	•	Receives emails sent to a managed domain (e.g. iris@liazon.cc)
+	•	Processes raw RFC-822 email content
+	•	Extracts sender, recipients, subject, body, and threading headers
 
-All outbound emails are generated **only in response to an inbound email** and only to
-addresses explicitly included in that conversation.
+2. Thread-Aware Conversation Handling
+	•	Canonical thread identification across all participants
+	•	Robust handling of:
+	•	Gmail Message-Id
+	•	In-Reply-To
+	•	References
+	•	SES-generated message IDs
+	•	Replies from different participants are correctly resolved into the same logical thread
 
----
+3. Single-Participant Scheduling
+	•	Handles direct scheduling requests (“Schedule something tomorrow”)
+	•	Parses time expressions using AI
+	•	Defaults to 30-minute meetings unless otherwise specified
 
-## What This Service Does *Not* Do
+4. Multi-Participant Coordination (Key Feature)
 
-- ❌ No marketing emails  
-- ❌ No bulk messaging  
-- ❌ No cold outreach  
-- ❌ No mailing lists  
-- ❌ No third-party address acquisition  
+When Iris is included on an email with multiple participants, she:
+	1.	Detects a coordination request
+	2.	Identifies all required participants from the original message
+	3.	Asks each participant for availability (with suggested formats)
+	4.	Waits for all participants to respond
+	5.	Reconciles availability
+	6.	Schedules the meeting and sends calendar invitations
 
-Every outbound email is **transactional, contextual, and user-initiated**.
+Important rules:
+	•	Availability ranges (e.g. “2–4pm”) are not meeting duration
+	•	Meeting duration defaults to 30 minutes unless explicitly specified
+	•	Iris never schedules until all participants have responded
 
----
+⸻
 
-## Email Compliance & Consent Model
+AI-Driven Understanding
 
-- Emails are sent **only after a user initiates contact**
-- Recipients are limited to:
-  - The original sender
-  - Participants already included on the email thread
-- No persistence of recipient lists for reuse or campaigns
-- No tracking pixels or marketing analytics
+Iris uses an LLM to interpret natural language such as:
+	•	“Any afternoon Mon–Tue next week”
+	•	“After 3, but not during pickup”
+	•	“Friday works, Saturday maybe”
 
-This aligns with AWS SES **Transactional Email** usage guidelines.
+The AI is responsible for interpretation and normalization, not execution.
 
----
+Deterministic code remains responsible for:
+	•	Conflict detection
+	•	Availability intersection
+	•	Final scheduling decisions
 
-## Architecture (High Level)
+⸻
 
-- **Amazon SES (Inbound)**  
-  Receives incoming emails via receipt rules
+AI Reasoning Mode (Optional)
 
-- **Amazon S3**  
-  Stores raw inbound email messages for processing
+An optional AI Reasoning Mode allows the LLM to:
+	•	Consider all participant responses holistically
+	•	Propose a concrete meeting slot (or alternatives)
+	•	Identify missing or ambiguous responses
 
-- **AWS Lambda (Python)**  
-  Parses inbound messages, applies logic, and generates responses
+Even in this mode:
+	•	Iris validates all proposals deterministically
+	•	Iris never schedules invalid or unsafe times
+	•	Deterministic fallback logic remains in place
 
-- **Amazon SES (Outbound)**  
-  Sends transactional replies and calendar invites (`SendRawEmail`)
+Enabled via environment variable:
 
----
+AI_REASONING_MODE=true
 
-## Current Status
 
-- Domain verified in SES
-- Inbound email processing operational
-- Outbound transactional emails operational
-- Calendar invitations successfully delivered and rendered by major providers (e.g. Gmail)
+⸻
 
-This repository represents an **early-stage prototype**, not a public-facing production service.
+Architecture
 
----
+High-Level Flow
 
-## Intended Use
+flowchart LR
+  Email[Inbound Email]
+  Email --> SESin[Amazon SES Inbound]
+  SESin --> S3[Amazon S3 - Raw Email]
+  S3 --> Lambda[AWS Lambda - Iris Handler]
 
-The long-term goal is to support individuals and small teams who explicitly choose to use
-Iris as a scheduling assistant by routing emails through their own domain.
+  Lambda --> LLM[LLM - Parsing & Reasoning]
+  Lambda --> DDB[DynamoDB - Threads & State]
+  DDB --> Lambda
 
-Future versions may support:
-- User-owned sending domains
-- Explicit user onboarding
-- Per-user configuration and controls
+  Lambda --> SESout[Amazon SES Outbound]
+  SESout --> Recipients[Participants]
 
----
+Key Components
+	•	Amazon SES (Inbound)
+	•	Receives transactional emails
+	•	Enforces strict receipt rules
+	•	Amazon S3
+	•	Stores raw inbound messages
+	•	AWS Lambda (Python)
+	•	Entry point for all processing
+	•	Thread resolution
+	•	Coordination logic
+	•	AI integration
+	•	DynamoDB
+	•	Thread state
+	•	Participant tracking
+	•	Coordination lifecycle
+	•	LLM Integration
+	•	Natural language understanding
+	•	Availability parsing
+	•	Optional reconciliation proposals
+	•	Amazon SES (Outbound)
+	•	Sends replies and calendar invites (SendRawEmail)
 
-## Contact
+⸻
 
-For questions related to this proof-of-concept or SES usage review, please contact:
+Email Compliance & Safety
 
-**Repository Owner:**  
-Eugene Yamnitsky  
+This service is strictly transactional:
+	•	Emails are sent only in response to inbound messages
+	•	Recipients are limited to:
+	•	The original sender
+	•	Participants already present on the thread
+	•	No marketing, bulk, or cold outreach
+	•	No tracking pixels or analytics
+	•	No reuse of recipient lists
+
+Designed to comply with:
+	•	AWS SES Transactional Email policy
+	•	AWS Acceptable Use Policy
+
+⸻
+
+Current Status
+	•	✅ Domain verified in SES
+	•	✅ Inbound and outbound email operational
+	•	✅ Calendar invitations render correctly (Gmail, Apple Mail, Outlook)
+	•	✅ Multi-participant coordination functional
+	•	⚠️ Ongoing iteration on AI reconciliation quality
+
+This is not yet a production SaaS.
+
+⸻
+
+Non-Goals (For Now)
+	•	No calendar API integrations (Google / Microsoft)
+	•	No user UI
+	•	No background reminders or nudges
+	•	No scheduling without explicit participant replies
+
+⸻
+
+Intended Use
+
+Iris is intended for:
+	•	Individuals or small teams
+	•	Explicit, opt-in usage
+	•	Scheduling initiated by real human emails
+
+Future iterations may include:
+	•	User-owned domains
+	•	Per-user customization
+	•	Richer coordination strategies
+
+⸻
+
+Contact
+
+Repository Owner:
+Eugene Yamnitsky
 Email: eugene.yamnitsky@gmail.com
 
----
+⸻
 
-## Acknowledgment
+Acknowledgment
 
-This service complies with:
-- AWS Service Terms
-- AWS Acceptable Use Policy (AUP)
-- AWS SES Transactional Email guidelines
+This project complies with:
+	•	AWS Service Terms
+	•	AWS Acceptable Use Policy
+	•	AWS SES Transactional Email guidelines
 
+⸻
+
+## License
+
+This project is licensed under the **Polyform Noncommercial License**.
+
+You are free to explore, modify, and use the code for non-commercial purposes.
+Commercial use requires explicit permission from the author.
