@@ -335,6 +335,10 @@ def handle_ses_event(event: dict) -> dict:
 
         outbound_msgs, schedule_plan = handler.handle(inbound)
 
+        if schedule_plan:
+            # Avoid double-notifying: we will send ICS invite below.
+            outbound_msgs = [m for m in outbound_msgs if " — scheduled" not in (m.subject or "")]
+
         for m in outbound_msgs:
             raw_mime = build_raw_mime_text_reply(
                 subject=m.subject,
