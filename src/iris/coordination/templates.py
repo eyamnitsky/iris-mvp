@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List
 
+from .types import OutboundMessage
 
 def availability_request_email(participant_emails: List[str], deadline: datetime | None, tz_name: str) -> str:
     deadline_str = f"{deadline.strftime('%a %m/%d %I:%M%p')} {tz_name}" if deadline else "soon"
@@ -23,7 +24,15 @@ def availability_request_email(participant_emails: List[str], deadline: datetime
 def clarification_email(question: str) -> str:
     return (
         "Quick clarification so I don’t schedule the wrong time:\n\n"
-        f"{question}\n"
+        f"{question}\n\n"
+        "You can reply in either way:\n\n"
+        "A) Specific time slot (preferred)\n"
+        "MM/DD: start–end (timezone)\n"
+        "Example: 02/11: 1pm–2pm ET\n\n"
+        "B) Flexible constraints (also OK)\n"
+        "- “Any afternoon Mon–Tue next week”\n"
+        "- “Any time after 3pm on Wednesday”\n"
+        "- “Any 30 min slot Tue–Thu between 10am–4pm PT”\n"
     )
 
 
