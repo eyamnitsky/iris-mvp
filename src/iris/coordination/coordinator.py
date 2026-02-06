@@ -116,6 +116,9 @@ class IrisCoordinator:
         Only schedules when ALL participants responded and no clarifications are pending.
         Returns a SchedulePlan and outbound messages (e.g., scheduled confirmation or no-overlap request).
         """
+        if thread.status == ThreadStatus.SCHEDULED:
+            return None, []
+
         if not thread.all_responded():
             return None, []
 
@@ -138,6 +141,10 @@ class IrisCoordinator:
         slot = find_earliest_overlap(thread)
         if slot is None:
             thread.status = ThreadStatus.WAITING
+            # Reset responses so everyone must provide new availability
+            for p in thread.participants.values():
+                p.has_responded = False
+                p.parsed_windows = []
             # Ask for more availability from everyone
             return None, [
                 OutboundMessage(
