@@ -15,6 +15,7 @@ from .templates import (
 )
 
 from .constraint_parser import parse_constraints
+from ..ai.text_normalize import clean_email_text
 
 @dataclass(frozen=True)
 class OutboundMessage:
@@ -64,6 +65,7 @@ class IrisCoordinator:
             # Unknown sender; ignore for now (could also add them dynamically).
             return []
 
+        body_text = clean_email_text(body_text)
         p.raw_response_text = body_text
         p.responded_at = datetime.utcnow()
 
