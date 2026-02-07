@@ -7,7 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from botocore.exceptions import ClientError
 
-from ..infra.config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, require_env
+from ..infra.config import BUCKET_NAME, IRIS_EMAIL, TIMEZONE, DEFAULT_DURATION_MINUTES, require_env
 from ..infra.aws_clients import table as _table, ses as _ses
 from ..infra.ddb import key_for_message
 from ..infra.serialization import ddb_clean, ddb_sanitize, to_json_safe
@@ -18,6 +18,7 @@ from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datet
 from ..email.mime_builder import build_ics, build_raw_mime_text_reply, build_raw_mime_reply_with_ics
 from ..infra.google_calendar import create_meet_event
 from ..infra.coordination_store import CoordinationStore
+from ..coordination.models import MeetingThread, Participant, ThreadStatus
 from ..infra.reminders import ensure_reminder_schedule
 from ..conversation.engine import process_incoming_email
 from ..conversation.guardrails import apply_input_guardrail
@@ -154,6 +155,41 @@ def handle_ses_event(event: dict) -> dict:
             Destinations=reply_recipients,
             RawMessage={"Data": raw_mime},
         )
+
+        # Ensure reminders exist even for single-participant threads.
+        store = CoordinationStore(_table())
+        thread = store.get(thread_id)
+        now = datetime.utcnow()
+        if not thread:
+            p = Participant(email=from_email.lower())
+            p.status = "PENDING"
+            p.requested_at = now
+            thread = MeetingThread(
+                thread_id=thread_id,
+                organizer_email=from_email.lower(),
+                participants={p.email: p},
+                timezone=thread_state.timezone or TIMEZONE,
+                meeting_duration_minutes=DEFAULT_DURATION_MINUTES,
+                subject=subject,
+            )
+        else:
+            p = thread.participants.get(from_email.lower())
+            if not p:
+                p = Participant(email=from_email.lower())
+                thread.participants[p.email] = p
+            p.status = "PENDING"
+            p.requested_at = p.requested_at or now
+
+        thread.status = ThreadStatus.NEEDS_CLARIFICATION
+        thread.availability_requests_sent_at = thread.availability_requests_sent_at or now
+        thread.reminder_status = "COLLECTING_AVAILABILITY"
+
+        if not thread.reminder_schedule_name:
+            schedule_name = ensure_reminder_schedule(thread_id)
+            if schedule_name:
+                thread.reminder_schedule_name = schedule_name
+
+        store.put(thread)
 
         item = key_for_message(message_id)
         item.update({
@@ -478,6 +514,13 @@ def handle_ses_event(event: dict) -> dict:
         Destinations=reply_recipients,
         RawMessage={"Data": raw_mime},
     )
+
+    # Close any pending reminder loop once scheduled.
+    store = CoordinationStore(_table())
+    thread = store.get(thread_id)
+    if thread:
+        thread.reminder_status = "SCHEDULED"
+        store.put(thread)
 
     item = key_for_message(message_id)
     item.update({
