@@ -75,7 +75,7 @@ def _timezone_name_from_dt(dt: datetime) -> str:
 
 
 def handle_ses_event(event: dict) -> dict:
-    print("DEPLOY_MARKER_ENTRYPOINT_REWRITE_002")
+    print("DEPLOY_MARKER_REMINDERS_2026_02_07_A")
     print("[event] records=", len(event.get("Records", [])))
 
     record = event["Records"][0]

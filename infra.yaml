@@ -107,6 +107,10 @@ Resources:
                 Resource: "*"
               - Effect: Allow
                 Action:
+                  - iam:PassRole
+                Resource: arn:aws:iam::345594578426:role/liazon-scheduler-invoke-lambda-prod
+              - Effect: Allow
+                Action:
                   - bedrock:InvokeModel
                   - bedrock:ApplyGuardrail
                 Resource: "*"
