@@ -95,15 +95,21 @@ def lambda_handler(event, context):
     for p in thread.participants.values():
         status = (p.status or "").upper()
         if status != "PENDING":
+            print(f"[reminder] skip status email={p.email} status={status}")
             continue
         if p.last_reminded_at:
+            print(f"[reminder] skip already_reminded email={p.email} at={p.last_reminded_at}")
             continue
 
         requested_at = p.requested_at or thread.availability_requests_sent_at
         if not requested_at:
+            print(f"[reminder] skip missing_requested_at email={p.email}")
             continue
 
         if _to_utc(requested_at) + delay > now:
+            print(
+                f"[reminder] skip too_soon email={p.email} requested_at={requested_at} now={now} delay={delay}"
+            )
             continue
 
         subject = f"{thread.subject} — availability reminder"
