@@ -100,6 +100,16 @@ Resources:
                 Action:
                   - ses:SendRawEmail
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - scheduler:GetSchedule
+                  - scheduler:CreateSchedule
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:ApplyGuardrail
+                Resource: "*"
       Tags:
         - Key: Stage
           Value: !Ref Stage
