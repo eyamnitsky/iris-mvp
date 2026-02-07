@@ -15,6 +15,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      BucketName: iris-prod-irisrawemailbucket-jm8b0udtvnuv
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -33,6 +34,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      TableName: iris-prod-IrisThreadsTable-9JUOO962XQBU
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: threadId
@@ -46,7 +48,10 @@ Resources:
 
   IrisInviteFunctionRole:
     Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
+      RoleName: iris-prod-IrisInviteFunctionRole-aonmONBO34jS
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -56,6 +61,7 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: IrisInviteFunctionPolicy
           PolicyDocument:
@@ -65,7 +71,16 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:GetObjectVersion
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetLifecycleConfiguration
                 Resource: !Sub ${IrisRawEmailBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetLifecycleConfiguration
+                Resource: !GetAtt IrisRawEmailBucket.Arn
               - Effect: Allow
                 Action:
                   - dynamodb:BatchGetItem
@@ -77,6 +92,7 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:Scan
                   - dynamodb:UpdateItem
+                  - dynamodb:DescribeTable
                 Resource:
                   - !GetAtt IrisThreadsTable.Arn
                   - !Sub ${IrisThreadsTable.Arn}/index/*
@@ -90,7 +106,10 @@ Resources:
 
   IrisReminderFunctionRole:
     Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
+      RoleName: iris-prod-IrisReminderFunctionRole-EhPk9ylfp6WY
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -100,6 +119,7 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: IrisReminderFunctionPolicy
           PolicyDocument:
@@ -116,6 +136,7 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:Scan
                   - dynamodb:UpdateItem
+                  - dynamodb:DescribeTable
                 Resource:
                   - !GetAtt IrisThreadsTable.Arn
                   - !Sub ${IrisThreadsTable.Arn}/index/*

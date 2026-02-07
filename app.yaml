@@ -28,6 +28,8 @@ Resources:
   IrisInviteFunction:
     Type: AWS::Serverless::Function
     Properties:
+      # Preserve existing physical name during import.
+      FunctionName: iris-prod-IrisInviteFunction-mWTN1LXzwlBP
       CodeUri: src/
       Handler: app.lambda_handler
       Role: !ImportValue
@@ -42,6 +44,12 @@ Resources:
             'Fn::Sub': '${InfraStackName}-RawEmailBucketName'
           TABLE_NAME: !ImportValue
             'Fn::Sub': '${InfraStackName}-ThreadsTableName'
+          SCHEDULER_ROLE_ARN: arn:aws:iam::345594578426:role/liazon-scheduler-invoke-lambda
+          SCHEDULER_GROUP_NAME: iris-reminders
+          REMINDER_DELAY_SECONDS: '10000'
+          REMINDER_LAMBDA_ARN: !GetAtt IrisReminderFunction.Arn
+          GOOGLE_OAUTH_SECRET_NAME: liazon/iris/google_oauth
+          AI_REASONING_MODE: 'true'
           IRIS_EMAIL: iris@liazon.cc
           TIMEZONE: America/New_York
           BEDROCK_GUARDRAIL_ID: 4us43pe9ntte
