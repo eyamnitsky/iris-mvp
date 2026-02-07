@@ -63,7 +63,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
-        - PolicyName: IrisInviteFunctionPolicy
+        - PolicyName: IrisInviteFunctionPolicyV2
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
