@@ -162,6 +162,35 @@ Resources:
         - Key: Stage
           Value: !Ref Stage
 
+  ContactFormSendFunctionRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: iris-prod-ContactFormSendFunctionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+      Policies:
+        - PolicyName: ContactFormSendFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                Resource: "*"
+      Tags:
+        - Key: Stage
+          Value: !Ref Stage
+
   IrisReminderScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
     DeletionPolicy: Retain
@@ -218,6 +247,11 @@ Outputs:
     Value: !GetAtt IrisReminderFunctionRole.Arn
     Export:
       Name: !Sub ${AWS::StackName}-ReminderFunctionRoleArn
+
+  ContactFormSendFunctionRoleArn:
+    Value: !GetAtt ContactFormSendFunctionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ContactFormSendFunctionRoleArn
 
   ReminderScheduleGroupName:
     Value: !Ref IrisReminderScheduleGroup

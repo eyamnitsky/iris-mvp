@@ -15,6 +15,18 @@ Parameters:
   ReminderDelaySeconds:
     Type: Number
     Default: 7200
+  ContactToEmail:
+    Type: String
+  ContactFromEmail:
+    Type: String
+  AllowedOrigins:
+    Type: String
+    Default: ""
+  SesRegion:
+    Type: String
+    Default: us-east-1
+  ContactApiId:
+    Type: String
 
 Globals:
   Function:
@@ -93,6 +105,30 @@ Resources:
           TIMEZONE: America/New_York
           REMINDER_DELAY_SECONDS: !Ref ReminderDelaySeconds
 
+  ContactFormSendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # Stack-managed name; ensures GitHub Actions / SAM deployments own this Lambda.
+      FunctionName: contact-form-send
+      CodeUri: src/
+      Handler: iris.entrypoints.contact_form_send.lambda_handler
+      Role: !ImportValue
+        'Fn::Sub': '${InfraStackName}-ContactFormSendFunctionRoleArn'
+
+      Environment:
+        Variables:
+          SES_REGION: !Ref SesRegion
+          CONTACT_TO_EMAIL: !Ref ContactToEmail
+          CONTACT_FROM_EMAIL: !Ref ContactFromEmail
+          ALLOWED_ORIGINS: !Ref AllowedOrigins
+      Events:
+        ContactFormPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApiId
+            Path: /contact
+            Method: POST
+
 Outputs:
   InviteFunctionName:
     Value: !Ref IrisInviteFunction
@@ -103,3 +139,8 @@ Outputs:
     Value: !Ref IrisReminderFunction
   ReminderFunctionArn:
     Value: !GetAtt IrisReminderFunction.Arn
+
+  ContactFormSendFunctionName:
+    Value: !Ref ContactFormSendFunction
+  ContactFormSendFunctionArn:
+    Value: !GetAtt ContactFormSendFunction.Arn
