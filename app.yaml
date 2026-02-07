@@ -12,6 +12,9 @@ Parameters:
   InfraStackName:
     Type: String
     Default: iris-infra-prod
+  ReminderDelaySeconds:
+    Type: Number
+    Default: 7200
 
 Globals:
   Function:
@@ -48,7 +51,7 @@ Resources:
             'Fn::Sub': '${InfraStackName}-SchedulerInvokeRoleArn'
           SCHEDULER_GROUP_NAME: !ImportValue
             'Fn::Sub': '${InfraStackName}-ReminderScheduleGroupName'
-          REMINDER_DELAY_SECONDS: '10000'
+          REMINDER_DELAY_SECONDS: !Ref ReminderDelaySeconds
           REMINDER_LAMBDA_ARN: !GetAtt IrisReminderFunction.Arn
           GOOGLE_OAUTH_SECRET_NAME: liazon/iris/google_oauth
           AI_REASONING_MODE: 'true'
@@ -88,6 +91,7 @@ Resources:
             'Fn::Sub': '${InfraStackName}-ThreadsTableName'
           IRIS_EMAIL: iris@liazon.cc
           TIMEZONE: America/New_York
+          REMINDER_DELAY_SECONDS: !Ref ReminderDelaySeconds
 
 Outputs:
   InviteFunctionName:
