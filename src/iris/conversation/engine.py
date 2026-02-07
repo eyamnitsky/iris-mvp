@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, Optional, Tuple
 import re
 
@@ -151,6 +152,37 @@ def _extract_time_minutes(text: str) -> Optional[int]:
     return hour * 60 + minute
 
 
+def _relative_weekday_name(text: str, tz_name: str) -> Optional[str]:
+    m = _RELATIVE_DAY_RE.search(text or "")
+    if not m:
+        return None
+    token = m.group(1).lower()
+    now_local = datetime.now(tz=ZoneInfo(tz_name))
+    if token == "tomorrow":
+        day = (now_local + timedelta(days=1)).date()
+    else:
+        day = now_local.date()
+    return day.strftime("%A")
+
+
+def _normalize_relative_candidate(candidate: Dict[str, Any], tz_name: str) -> Dict[str, Any]:
+    start_local = (candidate.get("start_local") or "").strip()
+    end_local = (candidate.get("end_local") or "").strip()
+    if not (_RELATIVE_DAY_RE.search(start_local) or _RELATIVE_DAY_RE.search(end_local)):
+        return candidate
+    weekday = _relative_weekday_name(start_local or end_local, tz_name)
+    if not weekday:
+        return candidate
+    def _replace(text: str) -> str:
+        return _RELATIVE_DAY_RE.sub(weekday, text)
+    normalized = dict(candidate)
+    if start_local:
+        normalized["start_local"] = _replace(start_local)
+    if end_local:
+        normalized["end_local"] = _replace(end_local)
+    return normalized
+
+
 def _candidate_from_time_only(
     time_minutes: int,
     weekday: str,
@@ -218,7 +250,14 @@ def process_incoming_email(
     if isinstance((ai_parsed or {}).get("candidates"), list):
         candidates = (ai_parsed or {}).get("candidates") or []
     had_ai_candidates = bool(candidates)
-    candidates = [c for c in candidates if isinstance(c, dict) and _candidate_has_weekday(c)]
+    normalized_candidates = []
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        normalized = _normalize_relative_candidate(c, tz)
+        if _candidate_has_weekday(normalized):
+            normalized_candidates.append(normalized)
+    candidates = normalized_candidates
     force_day_clarify = had_ai_candidates and not candidates
 
     clar_q = (ai_parsed or {}).get("clarifying_question") if isinstance(ai_parsed, dict) else None
@@ -311,6 +350,24 @@ def process_incoming_email(
                         last_candidate=last_candidate,
                     )
                     return thread_state, decision
+            if _RELATIVE_DAY_RE.search(body_text):
+                rel_weekday = _relative_weekday_name(body_text, tz)
+                time_minutes = _extract_time_minutes(body_text)
+                if rel_weekday and time_minutes is not None:
+                    last_candidate = _candidate_from_time_only(
+                        time_minutes=time_minutes,
+                        weekday=rel_weekday,
+                        duration_minutes=DEFAULT_DURATION_MINUTES,
+                        source_text=body_text,
+                    )
+                    decision = Decision(
+                        action="schedule",
+                        time_kind="candidate",
+                        chosen_candidate=last_candidate,
+                    )
+                    state = ConversationState.EXECUTION.value
+                elif rel_weekday and not _TIME_RE.search(body_text):
+                    clar_q = f"What time should I schedule that for {rel_weekday}?"
             if force_day_clarify or (
                 _TIME_RE.search(body_text)
                 and not (_WEEKDAY_RE.search(body_text) or _RELATIVE_DAY_RE.search(body_text))
