@@ -148,6 +148,42 @@ Resources:
         - Key: Stage
           Value: !Ref Stage
 
+  IrisReminderScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: iris-reminders-prod
+      Tags:
+        - Key: Stage
+          Value: !Ref Stage
+
+  IrisSchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: liazon-scheduler-invoke-lambda-prod
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: IrisSchedulerInvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+      Tags:
+        - Key: Stage
+          Value: !Ref Stage
+
 Outputs:
   RawEmailBucketName:
     Value: !Ref IrisRawEmailBucket
@@ -168,3 +204,13 @@ Outputs:
     Value: !GetAtt IrisReminderFunctionRole.Arn
     Export:
       Name: !Sub ${AWS::StackName}-ReminderFunctionRoleArn
+
+  ReminderScheduleGroupName:
+    Value: !Ref IrisReminderScheduleGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ReminderScheduleGroupName
+
+  SchedulerInvokeRoleArn:
+    Value: !GetAtt IrisSchedulerInvokeRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-SchedulerInvokeRoleArn

@@ -44,8 +44,10 @@ Resources:
             'Fn::Sub': '${InfraStackName}-RawEmailBucketName'
           TABLE_NAME: !ImportValue
             'Fn::Sub': '${InfraStackName}-ThreadsTableName'
-          SCHEDULER_ROLE_ARN: arn:aws:iam::345594578426:role/liazon-scheduler-invoke-lambda
-          SCHEDULER_GROUP_NAME: iris-reminders
+          SCHEDULER_ROLE_ARN: !ImportValue
+            'Fn::Sub': '${InfraStackName}-SchedulerInvokeRoleArn'
+          SCHEDULER_GROUP_NAME: !ImportValue
+            'Fn::Sub': '${InfraStackName}-ReminderScheduleGroupName'
           REMINDER_DELAY_SECONDS: '10000'
           REMINDER_LAMBDA_ARN: !GetAtt IrisReminderFunction.Arn
           GOOGLE_OAUTH_SECRET_NAME: liazon/iris/google_oauth

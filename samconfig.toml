@@ -13,6 +13,7 @@ image_repositories = []
 region = "us-east-1"
 
 [infra.deploy.parameters]
+template_file = "infra.yaml"
 stack_name = "iris-infra-prod"
 resolve_s3 = true
 s3_prefix = "iris-infra-prod"
@@ -24,6 +25,7 @@ parameter_overrides = "Stage=prod"
 image_repositories = []
 
 [app.deploy.parameters]
+template_file = "app.yaml"
 stack_name = "iris-app-prod"
 resolve_s3 = true
 s3_prefix = "iris-app-prod"
