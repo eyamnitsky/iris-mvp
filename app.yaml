@@ -109,7 +109,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       # Stack-managed name; ensures GitHub Actions / SAM deployments own this Lambda.
-      FunctionName: contact-form-send
+      FunctionName: contact-form-send-prod
       CodeUri: src/
       Handler: iris.entrypoints.contact_form_send.lambda_handler
       Role: !ImportValue
@@ -121,13 +121,32 @@ Resources:
           CONTACT_TO_EMAIL: !Ref ContactToEmail
           CONTACT_FROM_EMAIL: !Ref ContactFromEmail
           ALLOWED_ORIGINS: !Ref AllowedOrigins
-      Events:
-        ContactFormPost:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ContactApiId
-            Path: /contact
-            Method: POST
+
+  ContactFormSendPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ContactFormSendFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ContactApiId}/*/POST/contact
+
+  ContactFormSendIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ContactApiId
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 20000
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ContactFormSendFunction.Arn}/invocations
+
+  ContactFormSendRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ContactApiId
+      RouteKey: POST /contact
+      AuthorizationType: NONE
+      Target: !Sub integrations/${ContactFormSendIntegration}
 
 Outputs:
   InviteFunctionName:
