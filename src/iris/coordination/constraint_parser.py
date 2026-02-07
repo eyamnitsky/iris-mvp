@@ -215,7 +215,22 @@ def _parse_day_time_lines(text: str, tz: str) -> List[TimeWindow]:
         if not d:
             continue
 
-        times = normalize_dash(m.group("times"))
+        times_raw = m.group("times")
+        times = normalize_dash(times_raw)
+        # Allow single time like "Tue: 10pm" -> 1 hour window
+        single = _parse_time_token(times_raw.strip())
+        if single and "-" not in times_raw and "to" not in times_raw.lower():
+            s_h, s_m, s_amp = single
+            if s_amp == "" and s_h >= 13:
+                start_min = s_h * 60 + s_m
+            else:
+                start_min = _to_minutes(s_h, s_m, s_amp)
+            end_min = start_min + 60
+            if end_min <= 24 * 60:
+                tw = TimeWindow(day=d, start_minute=start_min, end_minute=end_min)
+                if tw.is_valid():
+                    windows.append(tw)
+                    continue
         for part in times.split(","):
             tr = split_time_range(part)
             if not tr:

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from .availability_parser import parse_availability
-from .models import MeetingThread, Participant, ThreadStatus
+from .models import MeetingThread, Participant, ThreadStatus, TimeWindow
 from .reconciler import find_earliest_overlap
 from .templates import (
     availability_request_email,
@@ -34,6 +35,39 @@ class SchedulePlan:
 class IrisCoordinator:
     def __init__(self, default_deadline_hours: int = 48) -> None:
         self.default_deadline_hours = default_deadline_hours
+
+    def _accept_all_response(self, text: str) -> bool:
+        t = (text or "").lower()
+        if any(kw in t for kw in ["can't", "cannot", "doesn't work", "does not work", "not work", "except"]):
+            return False
+        return any(
+            kw in t
+            for kw in [
+                "these times work",
+                "those times work",
+                "these times work for me",
+                "those times work for me",
+                "any of those work",
+                "all of those work",
+                "works for me",
+                "fine for me",
+                "sounds good",
+                "i'm flexible",
+                "i am flexible",
+                "whatever works",
+                "whatever time works",
+                "any time works",
+            ]
+        )
+
+    def _full_availability_windows(self, tz_name: str, days: int = 14) -> List[TimeWindow]:
+        tz = ZoneInfo(tz_name or "UTC")
+        today = datetime.now(tz=tz).date()
+        windows: List[TimeWindow] = []
+        for i in range(days):
+            d = date(today.year, today.month, today.day) + timedelta(days=i)
+            windows.append(TimeWindow(day=d, start_minute=0, end_minute=24 * 60))
+        return windows
 
     def start_thread(self, thread: MeetingThread) -> OutboundMessage:
         """
@@ -93,6 +127,9 @@ class IrisCoordinator:
                     subject=f"{thread.subject} — quick clarification",
                     body=clarification_email(clar_q),
                 )]
+            elif self._accept_all_response(body_text):
+                # Treat "these times work for me" as full flexibility.
+                p.parsed_windows = self._full_availability_windows(thread.timezone)
 
         if result.needs_clarification:
             p.needs_clarification = True
