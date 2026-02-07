@@ -17,6 +17,10 @@ def availability_request_email(participant_emails: List[str], deadline: datetime
         "Notes:\n"
         "- You can write `4–5pm` or `4pm–5pm` — I’ll interpret both.\n"
         "- You can include multiple days.\n\n"
+        "Flexible constraints are also OK, for example:\n"
+        "- “Any afternoon Mon–Wed next week”\n"
+        "- “Any time after 3pm on Wednesday”\n"
+        "- “Any 30 min slot Tue–Thu between 10am–4pm PT”\n\n"
         f"Please reply by {deadline_str} so I can schedule promptly.\n"
     )
 
@@ -48,5 +52,9 @@ def no_overlap_email() -> str:
     return (
         "I couldn’t find any overlapping availability across everyone’s replies.\n\n"
         "Could each of you share a few additional time windows (same format as before), "
-        "and I’ll try again?\n"
+        "and I’ll try again?\n\n"
+        "Flexible constraints are also OK (examples):\n"
+        "- “Any afternoon Mon–Wed next week”\n"
+        "- “Any time after 3pm on Wednesday”\n"
+        "- “Any 30 min slot Tue–Thu between 10am–4pm PT”\n"
     )
