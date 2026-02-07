@@ -80,6 +80,35 @@ Resources:
 
   # Allow SES receipt rules to invoke this Lambda.
   # NOTE: This does not create SES rules; it only permits invocation from the existing rule ARN.
+  IrisReminderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # Stack-managed name; ensures GitHub Actions / SAM deployments own this Lambda.
+      FunctionName: liazon-reminder-handler
+      CodeUri: src/
+      Handler: iris.entrypoints.reminder_handler.lambda_handler
+
+      EphemeralStorage:
+        Size: 512
+
+      Environment:
+        Variables:
+          THREADS_TABLE: !Ref IrisThreadsTable
+          IRIS_EMAIL: iris@liazon.cc
+          TIMEZONE: America/New_York
+
+      Policies:
+        # Read/write thread state in DynamoDB
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IrisThreadsTable
+
+        # Send reminder emails via SES (SendRawEmail has no resource-level ARN; must be "*")
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendRawEmail
+              Resource: "*"
+
   AllowSesInvokeLambdaFromReceiptRule:
     Type: AWS::Lambda::Permission
     Properties:
@@ -98,3 +127,8 @@ Outputs:
     Value: !Ref IrisInviteFunction
   InviteFunctionArn:
     Value: !GetAtt IrisInviteFunction.Arn
+
+  ReminderFunctionName:
+    Value: !Ref IrisReminderFunction
+  ReminderFunctionArn:
+    Value: !GetAtt IrisReminderFunction.Arn
