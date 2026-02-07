@@ -90,6 +90,11 @@ def _extract_days(text: str, tz: str) -> Optional[List[date]]:
     t = text.lower()
     today = _now_date(tz)
 
+    if "tomorrow" in t:
+        return [today + timedelta(days=1)]
+    if re.search(r"\btoday\b", t):
+        return [today]
+
     base = today
     if "next week" in t:
         base = _start_of_next_week(today)
@@ -288,6 +293,20 @@ def parse_constraints(text: str, tz: str) -> Tuple[List[TimeWindow], Optional[st
         return [], "For “between … and …”, could you include AM/PM (e.g., 1pm–3pm) and your timezone?"
     if bounds:
         start_min, end_min = bounds
+    else:
+        # If a single time is present (e.g., "Tomorrow 5pm"), assume 1-hour window.
+        m = TIME_TOKEN_RE.search(t)
+        if m:
+            h = int(m.group(1))
+            minute = int(m.group(2) or "0")
+            ap = (m.group(3) or "").lower()
+            if ap in ("am", "pm"):
+                if ap == "am" and h == 12:
+                    h = 0
+                if ap == "pm" and h != 12:
+                    h += 12
+                start_min = _minutes(h, minute)
+                end_min = start_min + 60
 
     windows = [TimeWindow(day=d, start_minute=start_min, end_minute=end_min) for d in days]
     windows = [w for w in windows if w.is_valid()]
