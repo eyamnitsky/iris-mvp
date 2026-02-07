@@ -165,3 +165,55 @@ Commercial use requires explicit permission from the author.
 
 Repository Owner: Eugene Yamnitsky  
 Email: eugene.yamnitsky@gmail.com
+
+## Deployments (Infra + App)
+
+This repo now uses two stacks (the old `template.yaml` has been removed):
+- `infra.yaml` for stateful resources + stable IAM roles (manual change-set approval).
+- `app.yaml` for Lambda code + wiring (auto deploy on push).
+
+### Local deploy
+
+Infra (change set, then manual approval):
+
+```bash
+sam deploy \\
+  --template-file infra.yaml \\
+  --stack-name iris-infra-prod \\
+  --no-confirm-changeset \\
+  --no-execute-changeset \\
+  --resolve-s3 \\
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \\
+  --region us-east-1 \\
+  --parameter-overrides Stage=prod \\
+  --changeset-name iris-infra-prod-<CHANGE_SET_NAME>
+
+aws cloudformation describe-change-set \\
+  --stack-name iris-infra-prod \\
+  --change-set-name iris-infra-prod-<CHANGE_SET_NAME>
+
+aws cloudformation execute-change-set \\
+  --stack-name iris-infra-prod \\
+  --change-set-name iris-infra-prod-<CHANGE_SET_NAME>
+```
+
+App (fast deploy):
+
+```bash
+sam build --template-file app.yaml
+
+sam deploy \\
+  --template-file app.yaml \\
+  --stack-name iris-app-prod \\
+  --resolve-s3 \\
+  --no-confirm-changeset \\
+  --no-fail-on-empty-changeset \\
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \\
+  --region us-east-1 \\
+  --parameter-overrides Stage=prod InfraStackName=iris-infra-prod
+```
+
+### CI/CD
+
+- `deploy-infra.yml` (manual): run via `workflow_dispatch`, creates a change set and waits for approval before execution.
+- `deploy-app.yml` (auto): runs on every push to `main` for the app stack.

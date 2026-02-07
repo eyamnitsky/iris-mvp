@@ -1,0 +1,79 @@
+name: Deploy Infra (Change Set)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        description: Stage to deploy
+        options:
+          - prod
+        default: prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      STAGE: prod
+      STACK_NAME: iris-infra-prod
+      CHANGE_SET_NAME: iris-infra-prod-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::345594578426:role/GitHubDeployRoleIrisProd
+          aws-region: us-east-1
+
+      - name: Setup SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Create change set (infra stack)
+        run: |
+          sam deploy \
+            --template-file infra.yaml \
+            --stack-name "${STACK_NAME}" \
+            --no-confirm-changeset \
+            --no-execute-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --region us-east-1 \
+            --parameter-overrides Stage=${STAGE} \
+            --changeset-name "${CHANGE_SET_NAME}"
+
+      - name: Wait for change set
+        run: |
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "${STACK_NAME}" \
+            --change-set-name "${CHANGE_SET_NAME}"
+
+      - name: Show change set
+        run: |
+          aws cloudformation describe-change-set \
+            --stack-name "${STACK_NAME}" \
+            --change-set-name "${CHANGE_SET_NAME}"
+
+      - name: Manual approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ secrets.GITHUB_TOKEN }}
+          approvers: ${{ github.repository_owner }}
+          minimum-approvals: 1
+          issue-title: "Approve infra change set: ${STACK_NAME}"
+
+      - name: Execute change set
+        run: |
+          aws cloudformation execute-change-set \
+            --stack-name "${STACK_NAME}" \
+            --change-set-name "${CHANGE_SET_NAME}"
+
+      - name: Wait for stack completion
+        run: |
+          aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" \
+          || aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}"

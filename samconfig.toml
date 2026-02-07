@@ -11,3 +11,24 @@ image_repositories = []
 
 [default.global.parameters]
 region = "us-east-1"
+
+[infra.deploy.parameters]
+stack_name = "iris-infra-prod"
+resolve_s3 = true
+s3_prefix = "iris-infra-prod"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+no_execute_changeset = true
+parameter_overrides = "Stage=prod"
+image_repositories = []
+
+[app.deploy.parameters]
+stack_name = "iris-app-prod"
+resolve_s3 = true
+s3_prefix = "iris-app-prod"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = "Stage=prod InfraStackName=iris-infra-prod"
+image_repositories = []

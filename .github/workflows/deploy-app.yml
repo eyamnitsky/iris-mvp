@@ -1,8 +1,16 @@
-name: Deploy (prod)
+name: Deploy App
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        description: Stage to deploy
+        options:
+          - prod
+        default: prod
 
 jobs:
   deploy:
@@ -10,6 +18,10 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      STAGE: prod
+      STACK_NAME: iris-app-prod
+      INFRA_STACK_NAME: iris-infra-prod
 
     steps:
       - uses: actions/checkout@v4
@@ -24,13 +36,16 @@ jobs:
         uses: aws-actions/setup-sam@v2
 
       - name: Build
-        run: sam build
+        run: sam build --template-file app.yaml
 
-      - name: Create CloudFormation change set (no deploy)
+      - name: Deploy (app stack)
         run: |
           sam deploy \
-            --stack-name iris-prod \
+            --template-file app.yaml \
+            --stack-name "${STACK_NAME}" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
+            --resolve-s3 \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --region us-east-1
+            --region us-east-1 \
+            --parameter-overrides Stage=${STAGE} InfraStackName=${INFRA_STACK_NAME}
