@@ -58,3 +58,11 @@ def no_overlap_email() -> str:
         "- “Any time after 3pm on Wednesday”\n"
         "- “Any 30 min slot Tue–Thu between 10am–4pm PT”\n"
     )
+
+
+def reminder_email() -> str:
+    return (
+        "Quick reminder to share your availability for this meeting.\n\n"
+        "Please reply with a few time windows that work for you.\n"
+        "Thanks!\n"
+    )

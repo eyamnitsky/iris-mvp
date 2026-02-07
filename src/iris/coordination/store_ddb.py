@@ -62,6 +62,9 @@ class DdbThreadStore:
                 clarification_question=pd.get("clarification_question"),
                 responded_at=datetime.fromisoformat(pd["responded_at"]) if pd.get("responded_at") else None,
             )
+            p.status = pd.get("status") or ("RESPONDED" if p.has_responded else "PENDING")
+            p.requested_at = datetime.fromisoformat(pd["requested_at"]) if pd.get("requested_at") else None
+            p.last_reminded_at = datetime.fromisoformat(pd["last_reminded_at"]) if pd.get("last_reminded_at") else None
             participants[email] = p
 
         thread = MeetingThread(
@@ -73,12 +76,16 @@ class DdbThreadStore:
             subject=data.get("subject", "Meeting"),
         )
         thread.status = data.get("status", thread.status)
+        thread.reminder_status = data.get("reminder_status") or thread.reminder_status
+        thread.reminder_schedule_name = data.get("reminder_schedule_name")
         thread.availability_requests_sent_at = (
             datetime.fromisoformat(data["availability_requests_sent_at"])
             if data.get("availability_requests_sent_at")
             else None
         )
         thread.deadline_at = datetime.fromisoformat(data["deadline_at"]) if data.get("deadline_at") else None
+        if data.get("created_at"):
+            thread.created_at = datetime.fromisoformat(data["created_at"])
 
         thread.scheduled_start = datetime.fromisoformat(data["scheduled_start"]) if data.get("scheduled_start") else None
         thread.scheduled_end = datetime.fromisoformat(data["scheduled_end"]) if data.get("scheduled_end") else None
@@ -97,6 +104,9 @@ class DdbThreadStore:
                 "needs_clarification": p.needs_clarification,
                 "clarification_question": p.clarification_question,
                 "responded_at": p.responded_at.isoformat() if p.responded_at else None,
+                "status": p.status,
+                "requested_at": p.requested_at.isoformat() if p.requested_at else None,
+                "last_reminded_at": p.last_reminded_at.isoformat() if p.last_reminded_at else None,
             }
 
         data = {
@@ -107,6 +117,8 @@ class DdbThreadStore:
             "meeting_duration_minutes": thread.meeting_duration_minutes,
             "subject": thread.subject,
             "status": thread.status,
+            "reminder_status": thread.reminder_status,
+            "reminder_schedule_name": thread.reminder_schedule_name,
             "availability_requests_sent_at": thread.availability_requests_sent_at.isoformat()
             if thread.availability_requests_sent_at else None,
             "deadline_at": thread.deadline_at.isoformat() if thread.deadline_at else None,
@@ -114,6 +126,7 @@ class DdbThreadStore:
             "scheduled_end": thread.scheduled_end.isoformat() if thread.scheduled_end else None,
             "scheduling_rationale": thread.scheduling_rationale,
             "pending_candidate": thread.pending_candidate,
+            "created_at": thread.created_at.isoformat() if thread.created_at else None,
         }
 
         self._table.put_item(

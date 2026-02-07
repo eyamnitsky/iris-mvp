@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 import re
-from datetime import datetime, date
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from botocore.exceptions import ClientError
 
@@ -17,6 +17,8 @@ from ..infra.s3_loader import load_email_bytes_from_s3
 from ..scheduling.scheduling import next_day_at_default_time, candidate_to_datetimes
 from ..email.mime_builder import build_ics, build_raw_mime_text_reply, build_raw_mime_reply_with_ics
 from ..infra.google_calendar import create_meet_event
+from ..infra.coordination_store import CoordinationStore
+from ..infra.reminders import ensure_reminder_schedule
 from ..conversation.engine import process_incoming_email
 from ..conversation.guardrails import apply_input_guardrail
 
@@ -52,38 +54,6 @@ def _extract_thread_root_id(eml: dict, fallback_message_id: str) -> str:
     if not root:
         root = fallback_message_id
     return root.replace("\n", "").replace("\r", "").strip()
-
-
-# -------------------------
-# Coordination state storage
-# (uses existing DDB key generator safely)
-# -------------------------
-
-def _coord_key(thread_id: str) -> dict:
-    # Store coordination thread state under a synthetic message id so we don't
-    # depend on table key schema details.
-    return key_for_message(f"coord::{thread_id}")
-
-
-def _coord_get(thread_id: str) -> dict | None:
-    resp = _table().get_item(Key=_coord_key(thread_id))
-    item = resp.get("Item")
-    if not item:
-        return None
-    if item.get("record_type") != "COORDINATION_THREAD":
-        return None
-    return item
-
-
-def _coord_put(thread_id: str, coordination_json: str) -> None:
-    item = _coord_key(thread_id)
-    item.update({
-        "record_type": "COORDINATION_THREAD",
-        "thread_id": thread_id,
-        "updated_at": datetime.utcnow().isoformat() + "Z",
-        "coordination_json": coordination_json,
-    })
-    _table().put_item(Item=ddb_clean(ddb_sanitize(item)))
 
 
 # -------------------------
@@ -215,16 +185,11 @@ def handle_ses_event(event: dict) -> dict:
     ai_parsed = ddb_sanitize(ai_parsed_raw) if ai_parsed_raw else None  # critical for DDB + engine safety
 
     # ---- Multi participant routing (deterministic) ----
-    existing_coord_item = _coord_get(thread_id)
-    existing_participants = []
-    if existing_coord_item:
-        try:
-            data = json.loads(existing_coord_item.get("coordination_json") or "{}")
-            existing_participants = list((data.get("participants") or {}).keys())
-        except Exception:
-            existing_participants = []
+    store = CoordinationStore(_table())
+    existing_thread = store.get(thread_id)
+    existing_participants = list(existing_thread.participants.keys()) if existing_thread else []
 
-    if existing_coord_item:
+    if existing_thread:
         participants_all = existing_participants
         is_multi = True
     else:
@@ -242,97 +207,16 @@ def handle_ses_event(event: dict) -> dict:
         # Lazy imports to avoid circular import on cold start
         from ..coordination.handler import IrisCoordinationHandler, InboundEmail
         from ..coordination.models import MeetingThread, Participant
-        from ..coordination.store import ThreadStore  # only for typing; safe
-        # We'll adapt our DDB storage to match the coordination handler expected store API:
 
-        class _StoreAdapter:
-            def get(self, tid: str):
-                item = _coord_get(tid)
-                if not item:
-                    return None
-                data = json.loads(item.get("coordination_json") or "{}")
-                # Rehydrate MeetingThread minimally using models
-                participants = {}
-                for email, pd in (data.get("participants") or {}).items():
-                    p = Participant(email=email)
-                    p.has_responded = bool(pd.get("has_responded"))
-                    p.raw_response_text = pd.get("raw_response_text")
-                    p.needs_clarification = bool(pd.get("needs_clarification"))
-                    p.clarification_question = pd.get("clarification_question")
-                    # parsed_windows are reconstructed by the coordination module in coordinator;
-                    # store them as-is if present.
-                    p.parsed_windows = []
-                    for w in (pd.get("parsed_windows") or []):
-                        # TimeWindow is in models; import lazily
-                        from ..coordination.models import TimeWindow
-                        p.parsed_windows.append(TimeWindow(
-                            day=date.fromisoformat(w["day"]),
-                            start_minute=int(w["start_minute"]),
-                            end_minute=int(w["end_minute"]),
-                        ))
-                    participants[email] = p
-
-                t = MeetingThread(
-                    thread_id=data["thread_id"],
-                    organizer_email=data["organizer_email"],
-                    participants=participants,
-                    timezone=data["timezone"],
-                    meeting_duration_minutes=int(data.get("meeting_duration_minutes", 30)),
-                    subject=data.get("subject", subject),
-                )
-                t.status = data.get("status", t.status)
-                if data.get("deadline_at"):
-                    t.deadline_at = datetime.fromisoformat(data["deadline_at"])
-                if data.get("availability_requests_sent_at"):
-                    t.availability_requests_sent_at = datetime.fromisoformat(data["availability_requests_sent_at"])
-                if data.get("scheduled_start"):
-                    t.scheduled_start = datetime.fromisoformat(data["scheduled_start"])
-                if data.get("scheduled_end"):
-                    t.scheduled_end = datetime.fromisoformat(data["scheduled_end"])
-                t.scheduling_rationale = data.get("scheduling_rationale")
-                t.pending_candidate = data.get("pending_candidate")
-                return t
-
-            def put(self, thread):
-                def tw_to_dict(tw):
-                    return {"day": tw.day.isoformat(), "start_minute": tw.start_minute, "end_minute": tw.end_minute}
-                def p_to_dict(p):
-                    return {
-                        "email": p.email,
-                        "has_responded": p.has_responded,
-                        "raw_response_text": p.raw_response_text,
-                        "parsed_windows": [tw_to_dict(w) for w in (p.parsed_windows or [])],
-                        "needs_clarification": p.needs_clarification,
-                        "clarification_question": p.clarification_question,
-                        "responded_at": p.responded_at.isoformat() if getattr(p, "responded_at", None) else None,
-                    }
-                data = {
-                    "thread_id": thread.thread_id,
-                    "organizer_email": thread.organizer_email,
-                    "participants": {e: p_to_dict(p) for e, p in (thread.participants or {}).items()},
-                    "timezone": thread.timezone,
-                    "meeting_duration_minutes": thread.meeting_duration_minutes,
-                    "subject": thread.subject,
-                    "status": thread.status,
-                    "availability_requests_sent_at": thread.availability_requests_sent_at.isoformat()
-                        if thread.availability_requests_sent_at else None,
-                    "deadline_at": thread.deadline_at.isoformat() if thread.deadline_at else None,
-                    "scheduled_start": thread.scheduled_start.isoformat() if thread.scheduled_start else None,
-                    "scheduled_end": thread.scheduled_end.isoformat() if thread.scheduled_end else None,
-                    "scheduling_rationale": thread.scheduling_rationale,
-                    "pending_candidate": thread.pending_candidate,
-                }
-                _coord_put(thread.thread_id, json.dumps(to_json_safe(data)))
-
-        store = _StoreAdapter()
         coord_thread = store.get(thread_id)
 
         is_new = coord_thread is None
         if is_new:
+            participants = {e.lower(): Participant(email=e.lower()) for e in participants_all}
             coord_thread = MeetingThread(
                 thread_id=thread_id,
                 organizer_email=from_email,
-                participants={e: Participant(email=e) for e in participants_all},
+                participants=participants,
                 timezone=TIMEZONE,
                 subject=subject,
             )
@@ -422,6 +306,16 @@ def handle_ses_event(event: dict) -> dict:
                 references=eml.get("References"),
             )
             _ses().send_raw_email(Source=IRIS_EMAIL, Destinations=attendees, RawMessage={"Data": raw_mime})
+
+        if is_new:
+            refreshed = store.get(thread_id)
+            if refreshed and refreshed.availability_requests_sent_at:
+                should_schedule = refreshed.reminder_status in (None, "", "COLLECTING_AVAILABILITY")
+                if should_schedule and not refreshed.reminder_schedule_name:
+                    schedule_name = ensure_reminder_schedule(thread_id)
+                    if schedule_name:
+                        refreshed.reminder_schedule_name = schedule_name
+                        store.put(refreshed)
 
         # Message record (store ai_raw as string; don't store floats directly)
         item = key_for_message(message_id)

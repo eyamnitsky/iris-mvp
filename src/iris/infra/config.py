@@ -8,7 +8,7 @@ AWS_REGION = (
 )
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME")
-TABLE_NAME = os.environ.get("TABLE_NAME")
+TABLE_NAME = os.environ.get("TABLE_NAME") or os.environ.get("THREADS_TABLE")
 
 IRIS_EMAIL = os.environ.get("IRIS_EMAIL", "iris@liazon.cc").lower()
 TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
@@ -17,6 +17,11 @@ DEFAULT_START_HOUR = int(os.environ.get("DEFAULT_START_HOUR", "13"))
 DEFAULT_DURATION_MINUTES = int(os.environ.get("DEFAULT_DURATION_MINUTES", "30"))
 
 DDB_SK_VALUE = os.environ.get("DDB_SK_VALUE", "STATE")
+
+REMINDER_LAMBDA_ARN = os.environ.get("REMINDER_LAMBDA_ARN")
+SCHEDULER_ROLE_ARN = os.environ.get("SCHEDULER_ROLE_ARN")
+SCHEDULER_GROUP_NAME = os.environ.get("SCHEDULER_GROUP_NAME")
+REMINDER_DELAY_SECONDS = int(os.environ.get("REMINDER_DELAY_SECONDS", "7200"))
 
 
 def require_env() -> None:

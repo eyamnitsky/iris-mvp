@@ -245,6 +245,7 @@ class IrisCoordinationHandler:
                         thread.scheduled_end = end_dt
                         thread.scheduling_rationale = "Explicit time requested by organizer."
                         thread.status = ThreadStatus.SCHEDULED
+                        thread.reminder_status = "SCHEDULED"
                         thread.pending_candidate = None
                         self.store.put(thread)
                         return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)
@@ -258,6 +259,7 @@ class IrisCoordinationHandler:
                 thread.scheduled_end = end_dt
                 thread.scheduling_rationale = "Explicit time requested by organizer."
                 thread.status = ThreadStatus.SCHEDULED
+                thread.reminder_status = "SCHEDULED"
                 self.store.put(thread)
                 return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)
 
@@ -327,6 +329,7 @@ class IrisCoordinationHandler:
                         thread.scheduled_end = end_dt
                         thread.scheduling_rationale = "Explicit time requested by organizer."
                         thread.status = ThreadStatus.SCHEDULED
+                        thread.reminder_status = "SCHEDULED"
                         thread.pending_candidate = None
                         self.store.put(thread)
                         return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)
@@ -353,6 +356,7 @@ class IrisCoordinationHandler:
                         thread.scheduled_end = end_dt
                         thread.scheduling_rationale = "Explicit time requested by organizer."
                         thread.status = ThreadStatus.SCHEDULED
+                        thread.reminder_status = "SCHEDULED"
                         thread.pending_candidate = None
                         self.store.put(thread)
                         return [], SchedulePlan(start=start_dt, end=end_dt, rationale=thread.scheduling_rationale)

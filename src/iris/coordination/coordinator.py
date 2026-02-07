@@ -44,6 +44,11 @@ class IrisCoordinator:
 
         thread.availability_requests_sent_at = datetime.utcnow()
         thread.status = ThreadStatus.WAITING
+        thread.reminder_status = "COLLECTING_AVAILABILITY"
+        for p in thread.participants.values():
+            p.status = "PENDING"
+            p.requested_at = thread.availability_requests_sent_at
+            p.last_reminded_at = None
 
         body = availability_request_email(
             participant_emails=list(thread.participants.keys()),
@@ -68,6 +73,7 @@ class IrisCoordinator:
         body_text = clean_email_text(body_text)
         p.raw_response_text = body_text
         p.responded_at = datetime.utcnow()
+        p.status = "RESPONDED"
 
         result = parse_availability(body_text, tz_name=thread.timezone)
         p.parsed_windows = result.windows
@@ -160,6 +166,7 @@ class IrisCoordinator:
         thread.scheduled_end = slot.end
         thread.scheduling_rationale = slot.rationale
         thread.status = ThreadStatus.SCHEDULED
+        thread.reminder_status = "SCHEDULED"
 
         start_str = slot.start.strftime("%a %m/%d %I:%M%p")
         end_str = slot.end.strftime("%I:%M%p")

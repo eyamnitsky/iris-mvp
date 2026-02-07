@@ -9,6 +9,7 @@ _s3 = None
 _ses = None
 _ddb = None
 _ddb_client = None
+_scheduler = None
 
 
 def s3():
@@ -37,6 +38,13 @@ def ddb_client():
     if _ddb_client is None:
         _ddb_client = boto3.client("dynamodb", region_name=AWS_REGION)
     return _ddb_client
+
+
+def scheduler():
+    global _scheduler
+    if _scheduler is None:
+        _scheduler = boto3.client("scheduler", region_name=AWS_REGION)
+    return _scheduler
 
 
 def table():

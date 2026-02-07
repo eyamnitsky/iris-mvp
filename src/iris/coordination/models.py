@@ -33,6 +33,9 @@ class Participant:
     needs_clarification: bool = False
     clarification_question: Optional[str] = None
     responded_at: Optional[datetime] = None
+    status: str = "PENDING"  # PENDING | RESPONDED
+    requested_at: Optional[datetime] = None
+    last_reminded_at: Optional[datetime] = None
 
 
 @dataclass
@@ -48,6 +51,8 @@ class MeetingThread:
     availability_requests_sent_at: Optional[datetime] = None
     deadline_at: Optional[datetime] = None
     status: ThreadStatus = ThreadStatus.WAITING
+    reminder_status: str = "COLLECTING_AVAILABILITY"
+    reminder_schedule_name: Optional[str] = None
 
     scheduled_start: Optional[datetime] = None
     scheduled_end: Optional[datetime] = None
