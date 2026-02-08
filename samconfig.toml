@@ -32,5 +32,5 @@ s3_prefix = "iris-app-prod"
 region = "us-east-1"
 confirm_changeset = false
 capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
-parameter_overrides = "Stage=prod InfraStackName=iris-infra-prod ReminderDelaySeconds=60 ContactToEmail=eugene.yamnitsky@gmail.com ContactFromEmail=eugene.yamnitsky@gmail.com AllowedOrigins=https://liazon.cc,https://www.liazon.cc SesRegion=us-east-1 ContactApiId=7ofigcp921"
+parameter_overrides = "Stage=prod InfraStackName=iris-infra-prod ReminderDelaySeconds=60 ContactToEmail=eugene.yamnitsky@gmail.com ContactFromEmail=no-reply@liazon.cc AllowedOrigins=https://liazon.cc,https://www.liazon.cc SesRegion=us-east-1 ContactApiId=7ofigcp921"
 image_repositories = []
